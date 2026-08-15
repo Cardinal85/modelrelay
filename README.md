@@ -57,6 +57,69 @@ powershell -File scripts/deploy.ps1 `
 生产环境启动前，请先准备 mTLS 证书并检查生成的 YAML 配置。
 详细步骤见[部署与运维指南](docs/deployment.md)。
 
+## 安装后下一步
+
+### Relay 服务器
+
+一键安装会创建并启动 `modelrelay-relay` 服务。先复制证书并检查配置：
+
+```bash
+sudo install -m 0644 relay.crt /etc/modelrelay/relay.crt
+sudo install -m 0600 relay.key /etc/modelrelay/relay.key
+sudo install -m 0644 agent-ca.crt /etc/modelrelay/agent-ca.crt
+sudo chown modelrelay:modelrelay /etc/modelrelay/relay.crt \
+  /etc/modelrelay/relay.key /etc/modelrelay/agent-ca.crt
+
+sudo systemctl restart modelrelay-relay
+sudo systemctl status modelrelay-relay --no-pager
+sudo journalctl -u modelrelay-relay -n 100 --no-pager
+```
+
+证书路径必须与 `/etc/modelrelay/relay.yaml` 中的 `tls_cert`、`tls_key`、
+`agent_ca` 一致。查看首次生成的管理员密码：
+
+```bash
+sudo sed -n 's/^RELAY_ADMIN_PASSWORD=//p' /etc/modelrelay/relay.env
+```
+
+本机验证 Relay：
+
+```bash
+TOKEN="$(sudo sed -n 's/^RELAY_INTERNAL_TOKEN=//p' /etc/modelrelay/relay.env)"
+curl -i http://127.0.0.1:9100/v1/models \
+  -H "Authorization: Bearer $TOKEN"
+unset TOKEN
+```
+
+WebUI 默认只监听 `127.0.0.1:9200`，远程查看时建立 SSH 隧道：
+
+```bash
+ssh -L 9200:127.0.0.1:9200 root@<relay-host>
+```
+
+然后打开 `http://127.0.0.1:9200/`，使用 `admin` 和上述密码登录。
+
+### Agent 模型节点
+
+在 GPU 模型服务器执行一键安装：
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.sh \
+  | sudo bash -s -- --component agent \
+    --node-id gpu-001 \
+    --relay-url wss://<relay-host>:9443/agent/v1/connect
+```
+
+然后将 Agent 证书、私钥和 Relay CA 公钥复制到 `/etc/model-agent/`，
+检查 `agent.yaml` 中的本地模型地址，最后执行：
+
+```bash
+sudo systemctl restart modelrelay-agent
+sudo systemctl status modelrelay-agent --no-pager
+sudo journalctl -u modelrelay-agent -n 100 --no-pager
+```
+
 ## 接入 New API
 
 在 New API 中新增 OpenAI-compatible 渠道：
