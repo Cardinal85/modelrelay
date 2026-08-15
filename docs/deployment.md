@@ -3,7 +3,7 @@
 当前版本：**0.2.0**
 
 本文档只有一条主流程：**Relay → 证书 → Agent → New API → 验收**。
-请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；卸载见第 11 节；平台差异、反代和手工安装放在文档末尾。
+请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；两套 CA 拷反见第 8.6 节；卸载见第 11 节；平台差异、反代和手工安装放在文档末尾。
 
 安装器会下载 GitHub 上的 **latest** 发布包。0.2.0 起发布包包含
 `certmgr` 图形证书管理器（需对应操作系统的包；Fyne 程序在目标系统本地构建）。
@@ -336,6 +336,14 @@ certctl init-ca \
 ```
 
 `certctl init-ca` 会在每个目录生成 `agent-ca.crt` 和 `agent-ca.key`。
+Relay 那套必须加 `-cn "ModelRelay Relay CA"`，否则两套主题都叫 `ModelRelay Agent CA`，
+后面很难用文件名区分。拷到 GPU 时把 `./ca/relay/agent-ca.crt` **改名为** `relay-ca.crt`。
+创建后立刻检查：
+
+```bash
+certctl inspect -cert ./ca/agent/agent-ca.crt   # Subject: ModelRelay Agent CA
+certctl inspect -cert ./ca/relay/agent-ca.crt   # Subject: ModelRelay Relay CA
+```
 
 ### 2.2 生成 Agent CSR（必须在 GPU 主机上）
 
@@ -676,6 +684,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $p `
   -LocalBaseUrl "http://127.0.0.1:8000/v1"
 ```
 
+只装 **Agent**。不要在 GPU 上执行 `-Component Relay`，也不要运行
+`Restart-Service ModelRelayRelay` 或 `Start-ScheduledTask ModelRelay-Relay`。
+那些属于 Relay 主机；GPU 上本来就没有这个服务，会报「系统找不到指定的文件」。
+
+无 NSSM 时任务名是 `ModelRelay-Agent`，日志是 `C:\ModelRelay\data\agent.log`。
+旧安装器曾误注册为 `ModelRelay-ModelRelayAgent`，找不到任务时先查：
+
+```powershell
+Get-ScheduledTask | Where-Object { $_.TaskName -like "*ModelRelay*" } | Format-Table TaskName, State
+```
+
+再重跑上面的 `install.ps1 -Component Agent`（不覆盖已有证书和 `agent.yaml`），
+或前台运行 `C:\ModelRelay\bin\run-agent.ps1`。
+
 GPU 在 NAT 后面即可，一般只需允许**出站** TCP `9443`。Windows 默认出站是放行的。
 
 #### macOS GPU
@@ -703,6 +725,8 @@ sudo chown modelrelay:modelrelay \
   /etc/model-agent/gpu-001.crt \
   /etc/model-agent/gpu-001.key \
   /etc/model-agent/relay-ca.crt
+sudo /opt/modelrelay/bin/certctl inspect -cert /etc/model-agent/relay-ca.crt
+# Subject 必须是 ModelRelay Relay CA
 ```
 
 Windows：
@@ -712,7 +736,13 @@ $d = "C:\ModelRelay\etc\agent"
 Copy-Item -Force gpu-001.crt "$d\gpu-001.crt"
 Copy-Item -Force relay-ca.crt "$d\relay-ca.crt"
 # gpu-001.key 必须仍是本机 certctl csr 生成的那份
+C:\ModelRelay\bin\certctl.exe inspect -cert "$d\relay-ca.crt"
+C:\ModelRelay\bin\certctl.exe inspect -cert "$d\gpu-001.crt"
 ```
+
+`relay-ca.crt` 的 Subject 必须是 **ModelRelay Relay CA**。
+若看到 `ModelRelay Agent CA`，说明把 Agent CA 公钥拷反了，Agent 会报
+`unknown authority` / `verification error`。`gpu-001.crt` 的 Issuer 才应是 Agent CA。
 
 macOS：
 
@@ -1074,7 +1104,9 @@ sudo cp -a /etc/model-agent /backup/modelrelay/
 |---|---|
 | `source directory not found` | 使用 `scripts/install.sh`，不要手写旧版本目录 |
 | Relay 启动失败 | Relay 日志、证书路径、权限和 `relay.yaml` |
-| Agent TLS 失败 | 两套 CA、证书 SAN 是否包含 URL 主机名、`node_id` 与 CN、系统时间 |
+| Agent TLS 失败 | 两套 CA 是否拷反（见 8.6）、证书 SAN 是否包含 URL 主机名、`node_id` 与 CN、系统时间 |
+| `unknown authority` 且提到 `ModelRelay Agent CA` | GPU 的 `tls.ca` / `relay-ca.crt` 实际是 Agent CA，应换成 Relay CA |
+| `remote error: tls: unknown certificate authority` | Relay 的 `agent_ca` / `agent-ca.crt` 不是签发 `gpu-001.crt` 的那份 Agent CA |
 | `x509: certificate is valid for ... not ...` | Agent URL 主机名不在 Relay 证书 SAN；重新签发并填对 `-dns`/`-ip` |
 | `uri is not listable`（certmgr 浏览） | 使用含原生文件对话框的 Windows `certmgr.exe`（v0.2.0 更新后的 `modelrelay-windows-amd64.zip`） |
 | 节点 offline | Relay `9443` 防火墙、GPU 出站、DNS、是否被七层 HTTPS 反代拆掉 mTLS |
@@ -1085,8 +1117,54 @@ sudo cp -a /etc/model-agent /backup/modelrelay/
 | 请求 `504` | 本地模型响应时间和超时配置；反代 `proxy_read_timeout` 是否过短 |
 | SSE 卡住或一次性刷出 | 反代开启了缓冲；见第 9 节 `proxy_buffering off` |
 | WebUI `401` | 管理员密码和会话是否过期 |
-| Windows 服务起不来 | 任务计划/NSSM 是否管理员安装；查看 `C:\ModelRelay\data\*.err.log` |
+| Windows `系统找不到指定的文件`（0x80070002） | GPU 上误启 `ModelRelay-Relay`；或旧任务名 `ModelRelay-ModelRelayAgent`，见 4.1 |
+| Windows 服务起不来 | 任务计划/NSSM 是否管理员安装；NSSM 看 `*.err.log`，否则看 `agent.log` / `relay.log` |
 | Windows `此应用无法运行` | `certmgr.exe` 需用 llvm-mingw CGO 构建，不要用 CodeBlocks MinGW 8.1 |
+
+### 8.6 两套 CA 拷反（Agent 连不上 Relay）
+
+两套 CA 不能互换。文件名像对、主题不对，一样会失败。
+
+| 文件 | 正确主题 | 作用 | 放哪 |
+|---|---|---|---|
+| GPU `relay-ca.crt`（`tls.ca`） | **ModelRelay Relay CA** | Agent 校验 Relay 的 WSS 证书 | GPU `etc/agent/` |
+| GPU `gpu-001.crt` | 由 Agent CA 签发 | Agent 出示的客户端证书 | 与本机 `gpu-001.key` 一对 |
+| Relay `agent-ca.crt`（`agent_ca`） | **ModelRelay Agent CA** | Relay 校验 GPU 客户端证书 | Relay `etc/relay/` 或 `/etc/modelrelay/` |
+| Relay `relay.crt` | 由 Relay CA 签发，SAN 含连接主机名 | Relay 的 WSS 服务端证书 | 与 `relay.key` 一对 |
+
+证书管理机（certmgr）默认目录：
+
+```text
+%USERPROFILE%\ModelRelay\ca\agent\agent-ca.crt     → 拷到 Relay，仍叫 agent-ca.crt
+%USERPROFILE%\ModelRelay\ca\relay\relay-ca.crt     → 拷到 GPU，仍叫 relay-ca.crt
+```
+
+`certctl init-ca` 在 `ca\relay\` 里生成的仍叫 `agent-ca.crt`，拷到 GPU 前要改名为 `relay-ca.crt`，并以 `inspect` 的 Subject 为准。
+
+GPU 上核对：
+
+```powershell
+C:\ModelRelay\bin\certctl.exe inspect -cert C:\ModelRelay\etc\agent\relay-ca.crt
+C:\ModelRelay\bin\certctl.exe inspect -cert C:\ModelRelay\etc\agent\gpu-001.crt
+```
+
+Linux：
+
+```bash
+certctl inspect -cert /etc/model-agent/relay-ca.crt
+certctl inspect -cert /etc/model-agent/gpu-001.crt
+```
+
+典型日志：
+
+1. `tls: failed to verify certificate: x509: certificate signed by unknown authority`
+   （并写着 candidate authority certificate **"ModelRelay Agent CA"**，或 `crypto/rsa: verification error`）
+   → GPU 拿 Agent CA 去校验 Relay 服务器证书。把 `ca/relay/` 下的 **Relay CA 公钥**覆盖 GPU 的 `relay-ca.crt`，重启 Agent。
+2. 换成 `remote error: tls: unknown certificate authority`
+   → 服务器证书已通过，但 Relay 不信任 `gpu-001.crt`。把 `ca/agent/agent-ca.crt` 拷到 Relay 的 `agent-ca.crt`，重启 **Relay**，再重启 Agent。
+3. 两套 CA 曾删除重建：旧证书全部作废，必须重新签发 Relay 服务端证书和每台 GPU 的 Agent 证书，两边都换成新公钥。
+
+不要把 `insecure_skip_verify` 设为 true。ModelRelay 不把证书写入 Windows 证书存储，换文件后重启进程即可。
 
 ## 9. 域名、反代、防火墙和证书 SAN
 
@@ -1341,9 +1419,9 @@ Agent 只连配置文件里的 `local.base_url`，防止 SSRF。
 | Relay 配置 | `/etc/modelrelay/relay.yaml` | `C:\ModelRelay\etc\relay\relay.yaml` | `/Library/Application Support/ModelRelay/relay.yaml` |
 | Agent 配置 | `/etc/model-agent/agent.yaml` | `C:\ModelRelay\etc\agent\agent.yaml` | `/Library/Application Support/ModelAgent/agent.yaml` |
 | 生成 CSR | `certctl csr -cn gpu-001 -out /etc/model-agent` | `certctl.exe csr -cn gpu-001 -out C:\ModelRelay\etc\agent` | `certctl csr -out ".../ModelAgent"` |
-| 启动 Relay | `systemctl restart modelrelay-relay` | `Restart-Service ModelRelayRelay` 或任务计划 | `launchctl kickstart ...relay` |
-| 启动 Agent | `systemctl restart modelrelay-agent` | `Restart-Service ModelRelayAgent` 或任务计划 | `launchctl kickstart ...agent` |
-| 日志 | `journalctl -u modelrelay-*` | `C:\ModelRelay\data\*.log` | `/var/log/modelrelay-*.err` |
+| 启动 Relay | `systemctl restart modelrelay-relay` | **仅 Relay 主机**：`Restart-Service ModelRelayRelay` 或 `Start-ScheduledTask ModelRelay-Relay` | `launchctl kickstart ...relay` |
+| 启动 Agent | `systemctl restart modelrelay-agent` | **仅 GPU**：`Restart-Service ModelRelayAgent` 或 `Start-ScheduledTask ModelRelay-Agent` | `launchctl kickstart ...agent` |
+| 日志 | `journalctl -u modelrelay-*` | NSSM：`data\ModelRelay*.err.log`；否则 `data\relay.log` / `data\agent.log` | `/var/log/modelrelay-*.err` |
 | 证书管理器 | 对应系统发布包中的 `certmgr`（需该 OS 本地 CGO 构建） | `certmgr.exe`（windows-amd64 包已含） | 在 macOS 上 `build-certmgr.sh` |
 | 拷 CSR | `scp gpu-001.csr ca-host:` | `scp` / U 盘 / SMB | `scp` |
 | 卸载 | 见第 11 节 | 见第 11 节 | 见第 11 节 |
@@ -1387,6 +1465,8 @@ if (Get-Command nssm.exe -ErrorAction SilentlyContinue) {
 
 Unregister-ScheduledTask -TaskName "ModelRelay-Relay" -Confirm:$false -ErrorAction SilentlyContinue
 Unregister-ScheduledTask -TaskName "ModelRelay-Agent" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "ModelRelay-ModelRelayRelay" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "ModelRelay-ModelRelayAgent" -Confirm:$false -ErrorAction SilentlyContinue
 
 Get-NetFirewallRule -DisplayName "*ModelRelay*" -ErrorAction SilentlyContinue |
   Remove-NetFirewallRule

@@ -36,18 +36,25 @@ curl -fsSL https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/
     --relay-url wss://relay.example.com:9443/agent/v1/connect
 ```
 
-**Windows**（开始菜单搜索 Windows PowerShell → 右键「以管理员身份运行」。加 `-NoProfile` 可避开本机配置文件改 PATH 导致的报错）：
+**Windows**（开始菜单搜索 Windows PowerShell → 右键「以管理员身份运行」。加 `-NoProfile` 可避开本机配置文件改 PATH 导致的报错）。
+**Relay 主机**和 **GPU** 分开装，不要在 GPU 上执行 `-Component Relay` 或 `ModelRelay-Relay`：
 
 ```powershell
 $p = Join-Path $env:TEMP "modelrelay-install.ps1"
 Invoke-WebRequest -UseBasicParsing `
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
   -OutFile $p
+# 只在 Relay 主机：
 powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Relay
+# 只在 GPU：
 powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Agent `
   -NodeId gpu-001 `
-  -RelayUrl "wss://relay.example.com:9443/agent/v1/connect"
+  -RelayUrl "wss://relay.example.com:9443/agent/v1/connect" `
+  -LocalBaseUrl "http://127.0.0.1:8000/v1"
 ```
+
+GPU 启动 Agent：`Start-ScheduledTask -TaskName ModelRelay-Agent`（有 NSSM 则 `Restart-Service ModelRelayAgent`）。
+无 NSSM 时日志在 `C:\ModelRelay\data\agent.log`。旧安装若任务名是 `ModelRelay-ModelRelayAgent`，见 [部署指南 4.1](docs/deployment.md)。
 
 发布包：https://github.com/Cardinal85/modelrelay/releases/latest  
 （`modelrelay-<os>-<arch>.zip`，Windows amd64 含 `certmgr.exe`）
@@ -55,7 +62,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Agent `
 ## 证书
 
 在证书管理机运行 `certmgr`：建两套 CA → 签发 Relay 服务端证书 → GPU 送来 CSR 后签发 Agent → 检查 → 分别导出。
-逐步操作和文件交接见 [部署指南 2.0 节](docs/deployment.md)。
+逐步操作见 [部署指南 2.0 节](docs/deployment.md)。
+
+两套 CA **不能拷反**。GPU 的 `relay-ca.crt` 主题必须是 `ModelRelay Relay CA`；
+Relay 的 `agent-ca.crt` 必须是 `ModelRelay Agent CA`。拷完用 `certctl inspect -cert ...` 核对。
+若 Agent 日志出现 `unknown authority` 且提到 `ModelRelay Agent CA`，就是 GPU 拿了 Agent CA 去校验 Relay，见 [部署指南 8.6](docs/deployment.md)。
+
+WSS `:9443` 必须用 Relay CA 签发的服务端证书，不要改成 Let's Encrypt。
 
 ## 域名、端口与反代
 
@@ -80,7 +93,7 @@ Base URL: http://127.0.0.1:9100/v1
 
 ## 文档
 
-- [部署与运维指南](docs/deployment.md)：安装、`certmgr` 流程、Windows 生成 CSR、反代、卸载
+- [部署与运维指南](docs/deployment.md)：安装、`certmgr` 流程、Windows CSR、两套 CA、反代、卸载
 - [配置说明](docs/config.md)
 - [New API 接入指南](docs/newapi.md)
 
