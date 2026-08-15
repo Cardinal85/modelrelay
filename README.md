@@ -82,14 +82,13 @@ powershell -File scripts/prepare-github-release.ps1 -Version 0.1.0 -Clean
 
 ## 从 GitHub 获取部署脚本
 
-脚本上传到 GitHub 后，可以通过 Raw URL 下载指定版本。请将
-`<OWNER>/<REPO>` 替换为实际仓库地址，并固定到 tag 或 commit：
+脚本已上传到 GitHub，可通过以下 Raw URL 下载：
 
 Linux/macOS：
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/deploy.sh \
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.sh \
   -o deploy.sh
 chmod +x deploy.sh
 sudo ./deploy.sh --source-dir ./modelrelay-0.1.0-linux-amd64 --component relay
@@ -98,7 +97,7 @@ sudo ./deploy.sh --source-dir ./modelrelay-0.1.0-linux-amd64 --component relay
 Windows：
 
 ```powershell
-$url = "https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/deploy.ps1"
+$url = "https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.ps1"
 $script = Join-Path $env:TEMP "modelrelay-deploy.ps1"
 Invoke-WebRequest -UseBasicParsing $url -OutFile $script
 powershell -ExecutionPolicy Bypass -File $script `
