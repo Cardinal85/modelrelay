@@ -125,11 +125,21 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -z "$source_dir" ]]; then
   source_dir="$script_dir/../bin"
 fi
-source_dir="$(cd -- "$source_dir" 2>/dev/null && pwd)" || die "source directory not found"
+[[ -d "$source_dir" ]] || die "source directory not found: $source_dir (download and extract the platform release ZIP first)"
+source_dir="$(cd -- "$source_dir" 2>/dev/null && pwd)" || die "cannot resolve source directory: $source_dir"
+
+check_binary() {
+  local name="$1"
+  [[ -f "$source_dir/$name" ]] || die "missing binary: $source_dir/$name"
+}
+
+if [[ "$component" == relay || "$component" == both ]]; then check_binary relay; fi
+if [[ "$component" == agent || "$component" == both ]]; then check_binary agent; fi
+if [[ -f "$source_dir/certctl" ]]; then check_binary certctl; fi
 
 copy_binary() {
   local name="$1"
-  [[ -x "$source_dir/$name" ]] || die "missing executable: $source_dir/$name"
+  [[ -f "$source_dir/$name" ]] || die "missing binary: $source_dir/$name"
   install -d -m 0755 "$bin_dir"
   install -m 0755 "$source_dir/$name" "$bin_dir/$name"
 }

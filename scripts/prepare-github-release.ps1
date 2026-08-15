@@ -104,6 +104,17 @@ $releaseReadme = @(
 ) -join [Environment]::NewLine
 Set-Content -Path (Join-Path $VersionRoot "README.md") -Value $releaseReadme -Encoding UTF8
 
+function New-ReleaseZip([string]$Source, [string]$Destination) {
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($null -eq $tar) {
+        Fail "missing tar.exe; install bsdtar to create ZIP files with portable path separators"
+    }
+    & $tar.Source -a -c -f $Destination -C $Source .
+    if ($LASTEXITCODE -ne 0) {
+        Fail "failed to create release archive: $Destination"
+    }
+}
+
 foreach ($package in $packages) {
     $name = $package.Name
     $staging = Join-Path $VersionRoot $name
@@ -130,9 +141,16 @@ foreach ($package in $packages) {
     ) -join [Environment]::NewLine
     Set-Content -Path (Join-Path $staging "PACKAGE-README.md") -Value $packageReadme -Encoding UTF8
 
-    Compress-Archive -Path (Join-Path $staging "*") -DestinationPath $zip -CompressionLevel Optimal
+    New-ReleaseZip $staging $zip
     Remove-Item -Recurse -Force $staging
     Write-Output "created $zip"
+
+    $prefix = "modelrelay-$Version-"
+    $stableName = "modelrelay-" + $name.Substring($prefix.Length) + ".zip"
+    $stableZip = Join-Path $VersionRoot $stableName
+    if (Test-Path $stableZip) { Remove-Item -Force $stableZip }
+    Copy-Item -Force $zip $stableZip
+    Write-Output "created $stableZip"
 }
 
 $sumLines = foreach ($zip in Get-ChildItem -Path $VersionRoot -Filter "*.zip" | Sort-Object Name) {
