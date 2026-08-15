@@ -23,7 +23,7 @@
 ## 更新记录
 
 - 2026-08-15：更新 Windows `certmgr.exe`，改为原生文件/文件夹选择框。请重新下载 `modelrelay-windows-amd64.zip`。
-- 2026-08-15：补充 `certmgr` 图形界面完整流程（两套 CA、签发 Relay/Agent、检查、导出、吊销）以及文件交接表。请使用包内 `docs/deployment.md` 第 2.0 节。
+- 2026-08-15：补充卸载程序和证书（部署指南第 11 节），并精简仓库 README 为快速部署入口。
 
 ## 发布前检查
 

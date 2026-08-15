@@ -3,7 +3,7 @@
 当前版本：**0.2.0**
 
 本文档只有一条主流程：**Relay → 证书 → Agent → New API → 验收**。
-请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；平台差异、反代和手工安装放在文档末尾。
+请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；卸载见第 11 节；平台差异、反代和手工安装放在文档末尾。
 
 安装器会下载 GitHub 上的 **latest** 发布包。0.2.0 起发布包包含
 `certmgr` 图形证书管理器（需对应操作系统的包；Fyne 程序在目标系统本地构建）。
@@ -1308,7 +1308,108 @@ Agent 只连配置文件里的 `local.base_url`，防止 SSRF。
 | 日志 | `journalctl -u modelrelay-*` | `C:\ModelRelay\data\*.log` | `/var/log/modelrelay-*.err` |
 | 证书管理器 | 对应系统发布包中的 `certmgr`（需该 OS 本地 CGO 构建） | `certmgr.exe`（windows-amd64 包已含） | 在 macOS 上 `build-certmgr.sh` |
 | 拷 CSR | `scp gpu-001.csr ca-host:` | `scp` / U 盘 / SMB | `scp` |
+| 卸载 | 见第 11 节 | 见第 11 节 | 见第 11 节 |
 
 手工 systemd / NSSM / launchd 见第 7 节。主备 Relay 见 7.4。日常备份、轮换、升级见第 8 节。
+卸载程序和证书见第 11 节。
+
+## 11. 卸载程序和证书
+
+卸载要分清三件事：**停程序**、**删本机文件**、**作废信任**。
+只删文件不会让对端立刻拒绝旧证书。退役 GPU 应先在 Relay 上吊销该节点证书。
+
+| 目的 | 做什么 |
+|---|---|
+| 暂时停用 | 只停服务，文件留下 |
+| 卸掉本机程序 | 停服务 + 删安装目录（先备份数据库和配置） |
+| 退役一台 GPU | 先吊销该节点证书，再删 GPU 上的程序和 `gpu-001.*` |
+| 整套作废 | 销毁 CA 私钥（证书管理机 + 离线备份），再删各机器上的程序和证书 |
+
+`certmgr` 没有安装器，关掉窗口即可。CA 工作区默认在当前用户目录
+`ModelRelay\ca\`（Windows）或 `~/ModelRelay/ca/`（Linux/macOS），
+**不会**随 Relay/Agent 安装目录一起删除。只卸运行节点时不要删这个目录。
+
+本地模型（vLLM / Ollama / LM Studio 等）不是 ModelRelay 安装的，按各自方式停止。
+
+### 11.1 Windows
+
+管理员 PowerShell。Relay 主机只卸 Relay，GPU 主机只卸 Agent。默认安装根目录是 `C:\ModelRelay`。
+
+```powershell
+Stop-Service ModelRelayRelay, ModelRelayAgent -ErrorAction SilentlyContinue
+Get-Service ModelRelayRelay, ModelRelayAgent -ErrorAction SilentlyContinue |
+  ForEach-Object { sc.exe delete $_.Name }
+
+if (Get-Command nssm.exe -ErrorAction SilentlyContinue) {
+  nssm stop ModelRelayRelay 2>$null
+  nssm remove ModelRelayRelay confirm 2>$null
+  nssm stop ModelRelayAgent 2>$null
+  nssm remove ModelRelayAgent confirm 2>$null
+}
+
+Unregister-ScheduledTask -TaskName "ModelRelay-Relay" -Confirm:$false -ErrorAction SilentlyContinue
+Unregister-ScheduledTask -TaskName "ModelRelay-Agent" -Confirm:$false -ErrorAction SilentlyContinue
+
+Get-NetFirewallRule -DisplayName "*ModelRelay*" -ErrorAction SilentlyContinue |
+  Remove-NetFirewallRule
+
+# 先备份 C:\ModelRelay\data 和 etc，再删除
+Remove-Item -Recurse -Force C:\ModelRelay
+```
+
+本机证书随安装目录删除：
+
+```text
+Relay：C:\ModelRelay\etc\relay\   relay.crt / relay.key / agent-ca.crt
+GPU：  C:\ModelRelay\etc\agent\   gpu-001.crt / gpu-001.key / relay-ca.crt
+```
+
+证书管理机上的 CA 是单独目录：
+
+```text
+C:\Users\<用户>\ModelRelay\ca\agent\agent-ca.key
+C:\Users\<用户>\ModelRelay\ca\relay\relay-ca.key
+```
+
+整套作废时才删除上述 `ca` 目录，并同时销毁离线备份中的 `.key`。
+
+### 11.2 Linux
+
+```bash
+sudo systemctl disable --now modelrelay-relay modelrelay-agent
+sudo rm -f /etc/systemd/system/modelrelay-relay.service \
+           /etc/systemd/system/modelrelay-agent.service
+sudo systemctl daemon-reload
+
+sudo rm -rf /opt/modelrelay
+# 先备份配置、证书和数据库
+sudo rm -rf /etc/modelrelay /etc/model-agent /var/lib/modelrelay
+sudo userdel modelrelay 2>/dev/null || true
+
+sudo firewall-cmd --permanent --remove-port=9443/tcp 2>/dev/null || true
+sudo ufw delete allow 9443/tcp 2>/dev/null || true
+```
+
+### 11.3 macOS
+
+```bash
+sudo launchctl bootout system/com.modelrelay.relay 2>/dev/null || true
+sudo launchctl bootout system/com.modelrelay.agent 2>/dev/null || true
+sudo rm -f /Library/LaunchDaemons/com.modelrelay.relay.plist \
+           /Library/LaunchDaemons/com.modelrelay.agent.plist
+
+sudo rm -rf /usr/local/libexec/modelrelay
+sudo rm -rf "/Library/Application Support/ModelRelay" \
+            "/Library/Application Support/ModelAgent"
+sudo rm -f /var/log/modelrelay-relay.log /var/log/modelrelay-relay.err \
+           /var/log/modelrelay-agent.log /var/log/modelrelay-agent.err
+```
+
+### 11.4 证书怎样才算失效
+
+1. **退役 GPU**：在 `certmgr`「在线吊销」中吊销该证书序列号，WebUI 确认节点断开，再删 GPU 上的程序和 `gpu-001.crt` / `.key`。只删文件、不吊销时，他人拿到旧密钥仍可能连上 Relay。
+2. **卸 Relay**：停服务并删 `relay.crt` / `relay.key`。若以后重装仍使用同一套 Agent CA，原先签发的 Agent 证书仍然有效。
+3. **作废整套 CA**：确认无用后销毁 `agent-ca.key` 和 `relay-ca.key`（证书管理机 + U 盘）。没有私钥就无法再签新证；已发出的证书要靠吊销或更换新 CA 才不再被信任。
+
 
 
