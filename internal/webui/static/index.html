@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ModelRelay</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="app">
+  <div id="login-view" class="login-wrap hidden">
+    <form id="login-form" class="card login-card">
+      <h1>ModelRelay</h1>
+      <p class="muted">Relay 运维控制台</p>
+      <input id="login-user" type="text" placeholder="用户名" autocomplete="username" required>
+      <input id="login-pass" type="password" placeholder="密码" autocomplete="current-password" required>
+      <p id="login-error" class="error hidden"></p>
+      <button type="submit" class="btn primary">登录</button>
+    </form>
+  </div>
+
+  <div id="main-view" class="hidden">
+    <aside class="sidebar">
+      <div class="brand">ModelRelay</div>
+      <nav>
+        <a href="#/overview" data-page="overview">总览</a>
+        <a href="#/nodes" data-page="nodes">节点</a>
+        <a href="#/capabilities" data-page="capabilities">接口能力</a>
+        <a href="#/certs" data-page="certs">证书</a>
+        <a href="#/requests" data-page="requests">请求追踪</a>
+        <a href="#/settings" data-page="settings">系统设置</a>
+      </nav>
+      <div class="sidebar-foot">
+        <span id="me-label" class="muted"></span>
+        <a href="#" id="logout-link">退出</a>
+      </div>
+    </aside>
+    <main class="content">
+      <div id="page-overview" class="page hidden"></div>
+      <div id="page-nodes" class="page hidden"></div>
+      <div id="page-capabilities" class="page hidden"></div>
+      <div id="page-certs" class="page hidden"></div>
+      <div id="page-requests" class="page hidden"></div>
+      <div id="page-settings" class="page hidden"></div>
+    </main>
+  </div>
+</div>
+
+<!-- 抽屉与弹窗 -->
+<div id="drawer" class="drawer hidden"></div>
+<div id="modal" class="modal-mask hidden">
+  <div class="modal card">
+    <div id="modal-title" class="modal-title"></div>
+    <div id="modal-body"></div>
+    <div class="modal-actions">
+      <button id="modal-cancel" class="btn">取消</button>
+      <button id="modal-ok" class="btn danger">确认</button>
+    </div>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

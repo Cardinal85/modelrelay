@@ -1,0 +1,50 @@
+# ModelRelay Relay 示例配置
+# 复制为 relay.yaml 后按需修改；敏感值可用 ${ENV_VAR} 引用环境变量。
+
+relay_id: relay-a
+relay_name: "主 Relay"
+
+# New API 通过该地址访问 Relay（只监听本机/受保护内网）。
+http_listen: "127.0.0.1:9100"
+
+# Agent 接入地址（公网 WSS 入口）。
+wss_listen: "0.0.0.0:9443"
+
+# Relay 自身证书（用于 WSS 服务端，公网可验证）。
+tls_cert: "/etc/model-agent/relay.crt"
+tls_key: "/etc/model-agent/relay.key"
+
+# 用于验证 Agent 客户端证书的 CA。
+agent_ca: "/etc/model-agent/agent-ca.crt"
+
+internal_auth:
+  enabled: true
+  token: "${RELAY_INTERNAL_TOKEN}"
+
+limits:
+  max_body_bytes: 67108864        # 64 MiB
+  max_concurrency: 64
+  queue_length: 256
+  queue_timeout_sec: 30
+  ttft_timeout_sec: 120
+  idle_timeout_sec: 300
+  request_timeout_sec: 1800
+  heartbeat_timeout_sec: 60
+
+admin:
+  listen: "127.0.0.1:9200"
+  session_ttl_min: 30
+  # 初始管理员（首次启动写入 SQLite；生产环境请用 certctl/初始化命令生成哈希后移除）
+  users:
+    - username: admin
+      password: "${RELAY_ADMIN_PASSWORD}"
+      role: admin
+
+store:
+  db_path: "/var/lib/modelrelay/modelrelay.db"
+
+retention:
+  keep_prompt_response: false      # 默认不保存完整 Prompt/Response
+  retention_days: 30
+
+log_level: info

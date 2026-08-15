@@ -1,0 +1,15 @@
+# Go toolchain (local, downloaded)
+.tools/
+*.exe
+*.test
+modelrelay.db
+modelrelay.db-*
+.local-webui/
+configs/relay.yaml
+configs/agent.yaml
+bin/
+dist/
+github-release/v*/
+
+.smoke/
+
