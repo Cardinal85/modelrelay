@@ -2,6 +2,27 @@
 
 > 本文档按部署方式分类。先选择一种方式，再阅读对应平台章节。
 
+## 完整部署时间线（推荐）
+
+下面是从零到接入 New API 的唯一推荐顺序：
+
+1. **准备机器**：Relay 主机、GPU 模型主机、证书管理机。
+2. **准备发布包**：在 Relay 和 Agent 主机选择对应系统/架构的发布包。
+3. **安装 Relay**：优先执行[一键部署脚本](#方式一一键部署推荐)。
+4. **准备证书**：创建 Agent CA、Relay CA，签发 Relay 和 Agent 证书。
+5. **配置 Relay**：复制 `relay.crt`、`relay.key`、`agent-ca.crt`，检查
+   `relay.yaml` 的证书路径。
+6. **启动并验证 Relay**：确认 `modelrelay-relay` 为 `active (running)`，
+   再验证 `9100`、`9443`、WebUI。
+7. **安装 Agent**：在 GPU 主机执行 Agent 一键安装或手工安装。
+8. **配置 Agent**：复制 Agent 证书、私钥、Relay CA，检查本地模型地址。
+9. **验证节点**：确认 Agent 日志无 TLS/连接错误，WebUI 节点为 `online`。
+10. **接入 New API**：配置 `http://<relay-host>:9100/v1` 和内部 Token。
+11. **完成验收**：测试 `/v1/models`、Chat 非流式、SSE 流式和取消请求。
+12. **生产加固**：限制端口、备份数据库、配置证书轮换和告警。
+
+任何一步失败，都先查看对应服务日志并修复，再进入下一步。
+
 ## 快速选择部署方式
 
 | 部署方式 | 适用场景 | 入口 |
