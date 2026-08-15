@@ -1,9 +1,13 @@
 package certs
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"net"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -114,6 +118,62 @@ func TestServerCertSANs(t *testing.T) {
 	}
 	if _, err := cert.Verify(opts); err != nil {
 		t.Fatalf("server verify: %v", err)
+	}
+}
+
+func TestIssueFromCSRURIMismatchRejected(t *testing.T) {
+	caCert, caKey, err := CreateCA("test-ca", 365)
+	if err != nil {
+		t.Fatalf("create ca: %v", err)
+	}
+	ca, err := LoadCA(caCert, caKey)
+	if err != nil {
+		t.Fatalf("load ca: %v", err)
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	tmpl := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "node-1"},
+		URIs:    []*url.URL{{Scheme: "spiffe", Host: "modelrelay", Path: "/agent/other"}},
+	}
+	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, key)
+	if err != nil {
+		t.Fatalf("csr: %v", err)
+	}
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
+	if _, err := ca.IssueFromCSR(csrPEM, "node-1", 30); err == nil {
+		t.Fatal("URI SAN mismatch must be rejected")
+	}
+}
+
+func TestIssueFromCSRRejectsNonPositiveDays(t *testing.T) {
+	caCert, caKey, _ := CreateCA("test-ca", 365)
+	ca, _ := LoadCA(caCert, caKey)
+	_, csrPEM, err := GenerateCSR("node-1")
+	if err != nil {
+		t.Fatalf("csr: %v", err)
+	}
+	if _, err := ca.IssueFromCSR(csrPEM, "node-1", 0); err == nil {
+		t.Fatal("days=0 must be rejected")
+	}
+}
+
+func TestParseAndValidateAgentCSR(t *testing.T) {
+	_, csrPEM, err := GenerateCSR("gpu-001")
+	if err != nil {
+		t.Fatalf("csr: %v", err)
+	}
+	csr, err := ParseCSR(csrPEM)
+	if err != nil {
+		t.Fatalf("parse csr: %v", err)
+	}
+	if err := ValidateAgentCSR(csr, "gpu-001"); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if err := ValidateAgentCSR(csr, "gpu-002"); err == nil {
+		t.Fatal("node id mismatch must fail")
 	}
 }
 

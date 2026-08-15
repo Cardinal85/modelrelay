@@ -31,6 +31,7 @@ if ($Clean) {
 
 if ($Race) {
     # Race detection (some sandboxed environments cannot start -race binaries; use a normal dev machine / CI)
+    $env:CGO_ENABLED = "0"
     go test ./... -race -count=1 -timeout 900s
     if ($LASTEXITCODE -ne 0) { exit 1 }
     $env:GOOS = $nativeGOOS; $env:GOARCH = $nativeGOARCH; $env:GOARM = $null; $env:CGO_ENABLED = $null
@@ -38,6 +39,7 @@ if ($Race) {
 }
 
 if ($Test) {
+    $env:CGO_ENABLED = "0"
     go vet ./...
     go test ./... -count=1 -timeout 600s
     if ($LASTEXITCODE -ne 0) { exit 1 }
@@ -46,7 +48,7 @@ if ($Test) {
 }
 
 $VERSION = go run ./cmd/certctl version | ForEach-Object { $_ -match "certctl (.+?) \(" | Out-Null; $Matches[1] }
-if (-not $VERSION) { $VERSION = "0.1.0" }
+if (-not $VERSION) { $VERSION = "0.2.0" }
 
 if ($All) {
     # Targets: Linux amd64/arm64/386/arm, Windows amd64/arm64/386, macOS amd64/arm64
@@ -67,6 +69,18 @@ if ($All) {
             go build -trimpath -ldflags "-s -w" -o $out ./cmd/$name
             if ($LASTEXITCODE -ne 0) { Write-Error "build failed for $name $($t.os)/$($t.arch)"; exit 1 }
         }
+        # certmgr is a Fyne desktop app and must be built natively with CGO.
+        if ($t.os -eq $nativeGOOS -and $t.arch -eq $nativeGOARCH) {
+            $cm = "dist/modelrelay-$VERSION-$($t.os)-$($t.arch)/certmgr$ext"
+            Write-Output "building $($t.os)/$($t.arch) certmgr ..."
+            $env:GOOS = $t.os; $env:GOARCH = $t.arch
+            $env:CGO_ENABLED = "1"
+            go build -trimpath -ldflags "-s -w" -o $cm ./cmd/certmgr
+            if ($LASTEXITCODE -ne 0) { Write-Error "build failed for certmgr $($t.os)/$($t.arch)"; exit 1 }
+            $env:CGO_ENABLED = "0"
+        } else {
+            Write-Output "skip certmgr for $($t.os)/$($t.arch) (Fyne requires native CGO; build on that OS with scripts/build-certmgr.sh or build.ps1)"
+        }
         # SHA256 checksums
         $dir = "dist/modelrelay-$VERSION-$($t.os)-$($t.arch)"
         Get-ChildItem $dir | ForEach-Object {
@@ -81,8 +95,16 @@ if ($All) {
 
 # current platform build
 New-Item -ItemType Directory -Force -Path "bin" | Out-Null
+$ext = if ($nativeGOOS -eq "windows") { ".exe" } else { "" }
 foreach ($name in @("relay", "agent", "certctl", "mockmodel")) {
     Write-Output "building $name ..."
-    go build -trimpath -o "bin/$name.exe" ./cmd/$name
+    $env:CGO_ENABLED = "0"
+    go build -trimpath -o "bin/$name$ext" ./cmd/$name
+    if ($LASTEXITCODE -ne 0) { Write-Error "build failed for $name"; exit 1 }
 }
+Write-Output "building certmgr ..."
+$env:CGO_ENABLED = "1"
+go build -trimpath -ldflags "-s -w" -o "bin/certmgr$ext" ./cmd/certmgr
+if ($LASTEXITCODE -ne 0) { Write-Error "build failed for certmgr"; exit 1 }
+$env:CGO_ENABLED = $null
 Write-Output "build done -> bin/"

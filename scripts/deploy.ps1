@@ -3,8 +3,8 @@
 ModelRelay 一键部署脚本（Windows）
 
 示例：
-  .\scripts\deploy.ps1 -SourceDir .\dist\modelrelay-0.1.0-windows-amd64 -Component Relay
-  .\scripts\deploy.ps1 -SourceDir .\dist\modelrelay-0.1.0-windows-amd64 `
+  .\scripts\deploy.ps1 -SourceDir .\dist\modelrelay-0.2.0-windows-amd64 -Component Relay
+  .\scripts\deploy.ps1 -SourceDir .\dist\modelrelay-0.2.0-windows-amd64 `
     -Component Agent -NodeId gpu-001 `
     -RelayUrl wss://relay.example.com:9443/agent/v1/connect
 

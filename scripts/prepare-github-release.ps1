@@ -3,8 +3,8 @@
 从 dist/ 生成 GitHub Release 发布包。
 
 示例：
-  powershell -File scripts/prepare-github-release.ps1 -Version 0.1.0
-  powershell -File scripts/prepare-github-release.ps1 -Version 0.1.0 -Clean
+  powershell -File scripts/prepare-github-release.ps1 -Version 0.2.0
+  powershell -File scripts/prepare-github-release.ps1 -Version 0.2.0 -Clean
 
 输出：
   github-release/v<version>/modelrelay-<version>-<os>-<arch>.zip
@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.2.0",
     [string]$DistDir = "",
     [string]$OutputDir = "",
     [switch]$Clean
@@ -139,6 +139,7 @@ foreach ($package in $packages) {
         "- Windows: run powershell -File scripts/deploy.ps1 as Administrator",
         "",
         "See docs/deployment.md. Prepare mTLS certificates and update the configuration.",
+        "Use certmgr on the CA machine for offline issue; do not put CA private keys in this package.",
         "Do not put private keys, internal tokens, or production databases in the package."
     ) -join [Environment]::NewLine
     Set-Content -Path (Join-Path $staging "PACKAGE-README.md") -Value $packageReadme -Encoding UTF8
@@ -163,7 +164,8 @@ if (-not (Test-Path $releaseNotes)) {
         "",
         "- Relay: OpenAI-compatible proxy, scheduling, queues, and WebUI.",
         "- Agent: WSS/mTLS connection, local model proxy, heartbeat, and discovery.",
-        "- certctl: CA, CSR, Agent certificate, and Relay server certificate tools.",
+        "- certctl: CA, CSR, Agent certificate, and Relay server certificate CLI.",
+        "- certmgr: cross-platform CA GUI for offline issue and optional online revoke.",
         "- Packages for Linux, Windows, and macOS architectures.",
         "",
         "## Release checklist",

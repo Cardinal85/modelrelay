@@ -59,6 +59,12 @@ func LoadCAFiles(certPath, keyPath string) (*CA, error) {
 
 // CreateCA 生成一个新的 CA（用于 certctl init-ca）。
 func CreateCA(cn string, days int) (certPEM, keyPEM []byte, err error) {
+	if days <= 0 {
+		return nil, nil, fmt.Errorf("certs: validity days must be positive")
+	}
+	if strings.TrimSpace(cn) == "" {
+		return nil, nil, fmt.Errorf("certs: CA common name is required")
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 3072)
 	if err != nil {
 		return nil, nil, err
@@ -106,9 +112,9 @@ func GenerateCSR(cn string) (keyPEM, csrPEM []byte, err error) {
 	return keyPEM, csrPEM, nil
 }
 
-// IssueFromCSR 使用 CA 为 CSR 签发证书（证书管理机上执行）。
-func (c *CA) IssueFromCSR(csrPEM []byte, cn string, days int) ([]byte, error) {
-	block, _ := pem.Decode(csrPEM)
+// ParseCSR 解析 PEM 编码的证书请求。
+func ParseCSR(pemBytes []byte) (*x509.CertificateRequest, error) {
+	block, _ := pem.Decode(pemBytes)
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
 		return nil, fmt.Errorf("certs: invalid CSR PEM")
 	}
@@ -116,12 +122,47 @@ func (c *CA) IssueFromCSR(csrPEM []byte, cn string, days int) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("certs: parse csr: %w", err)
 	}
-	if err := csr.CheckSignature(); err != nil {
-		return nil, fmt.Errorf("certs: csr signature invalid: %w", err)
+	return csr, nil
+}
+
+// ValidateAgentCSR 校验 Agent CSR：签名、CN 与 node_id、URI SAN。
+func ValidateAgentCSR(csr *x509.CertificateRequest, nodeID string) error {
+	if csr == nil {
+		return fmt.Errorf("certs: csr is nil")
 	}
-	// 身份一致性：签发时 CN 必须与 node_id 匹配（TASK-406）。
-	if csr.Subject.CommonName != cn {
-		return nil, fmt.Errorf("certs: csr CN %q does not match requested node id %q", csr.Subject.CommonName, cn)
+	if strings.TrimSpace(nodeID) == "" {
+		return fmt.Errorf("certs: node id is required")
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return fmt.Errorf("certs: csr signature invalid: %w", err)
+	}
+	if csr.Subject.CommonName != nodeID {
+		return fmt.Errorf("certs: csr CN %q does not match requested node id %q", csr.Subject.CommonName, nodeID)
+	}
+	want := AgentIdentityURI(nodeID)
+	if len(csr.URIs) != 1 || csr.URIs[0] == nil || csr.URIs[0].String() != want {
+		var got []string
+		for _, u := range csr.URIs {
+			if u != nil {
+				got = append(got, u.String())
+			}
+		}
+		return fmt.Errorf("certs: csr URI SAN %v does not match %s", got, want)
+	}
+	return nil
+}
+
+// IssueFromCSR 使用 CA 为 CSR 签发证书（证书管理机上执行）。
+func (c *CA) IssueFromCSR(csrPEM []byte, cn string, days int) ([]byte, error) {
+	if days <= 0 {
+		return nil, fmt.Errorf("certs: validity days must be positive")
+	}
+	csr, err := ParseCSR(csrPEM)
+	if err != nil {
+		return nil, err
+	}
+	if err := ValidateAgentCSR(csr, cn); err != nil {
+		return nil, err
 	}
 	serial, err := randomSerial()
 	if err != nil {
@@ -147,6 +188,12 @@ func (c *CA) IssueFromCSR(csrPEM []byte, cn string, days int) ([]byte, error) {
 
 // IssueServerCert 为 Relay 签发服务端证书（供测试与私有部署使用；公网部署建议使用公共 CA）。
 func (c *CA) IssueServerCert(cn string, ips []net.IP, dnsNames []string, days int) (certPEM, keyPEM []byte, err error) {
+	if days <= 0 {
+		return nil, nil, fmt.Errorf("certs: validity days must be positive")
+	}
+	if strings.TrimSpace(cn) == "" {
+		return nil, nil, fmt.Errorf("certs: server common name is required")
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err

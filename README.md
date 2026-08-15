@@ -1,5 +1,7 @@
 # ModelRelay
 
+当前版本：**0.2.0**
+
 ModelRelay 是一个安全的内网模型连接中间件，让 New API 等
 OpenAI-compatible 网关访问没有公网 IP 的 GPU 模型服务器。
 
@@ -8,6 +10,9 @@ New API → Relay（HTTP）→ Agent（WSS/mTLS）→ 本地 OpenAI-compatible �
                        ↘ WebUI / 管理 API
 ```
 
+0.2.0 增加跨平台证书管理器 `certmgr`：在证书管理机离线签发，只有吊销时才连接 Relay。
+CA 私钥不要放入发布包或运行节点。Agent 私钥必须在 GPU 主机本地生成。
+
 下面是一条完整部署时间线，请从第 1 步按顺序执行。
 
 ## 1. 准备三类机器
@@ -15,6 +20,8 @@ New API → Relay（HTTP）→ Agent（WSS/mTLS）→ 本地 OpenAI-compatible �
 - **Relay 主机**：Agent 能访问其 TCP `9443`。
 - **GPU 主机**：运行本地模型服务，例如 `http://127.0.0.1:8000/v1`。
 - **证书管理机**：保存 CA 私钥，不与 Relay 或 GPU 主机共用。
+  使用 `certmgr` 离线签发；只有吊销时才连接 Relay 管理 API。
+  CA 私钥不要放入发布包或运行节点。
 
 生产环境建议使用两套 CA：
 
@@ -48,8 +55,18 @@ sudo yum install -y curl unzip
 
 ## 3. 准备并复制 Relay 证书
 
-在证书管理机签发 Relay 服务端证书、Agent 客户端证书和对应 CA。
-具体 `certctl` 命令见[部署文档的证书章节](docs/deployment.md#通用准备部署拓扑与证书)。
+从 [GitHub Release](https://github.com/Cardinal85/modelrelay/releases/latest)
+下载对应操作系统的 `modelrelay-<os>-<arch>.zip`，在证书管理机运行 `certmgr`
+（Windows 为 `certmgr.exe`）：
+
+1. 创建 Agent CA 和 Relay CA，离线备份 `agent-ca.key` / `relay-ca.key`。
+2. GPU 主机用 `certctl csr` 生成私钥和 CSR，只把 CSR 拷到证书管理机。
+3. 导入 CSR 签发 Agent 证书；填写 CN/DNS/IP 签发 Relay 服务端证书。
+4. 分别导出 Relay 与 Agent 部署文件。
+5. 可选：登录 Relay 管理 API 吊销证书（不保存管理员密码）。
+
+证书管理机无需常在线，只在签发或轮换时使用。命令行步骤见
+[部署文档的证书章节](docs/deployment.md)。
 
 将以下文件复制到 Relay：
 

@@ -1,7 +1,17 @@
-﻿# ModelRelay build environment (PowerShell)
-$env:PATH = "E:\project\中间件\.tools\go\bin;$env:PATH"
-$env:GOMODCACHE = "E:\project\中间件\.tools\gopath\pkg\mod"
-$env:GOPATH = "E:\project\中间件\.tools\gopath"
-$env:GOCACHE = "E:\project\中间件\.tools\gocache"
-$env:HTTP_PROXY = "http://127.0.0.1:7897"
-$env:HTTPS_PROXY = "http://127.0.0.1:7897"
+﻿# ModelRelay optional local toolchain (PowerShell)
+$here = $PSScriptRoot
+if ([string]::IsNullOrWhiteSpace($here)) { $here = Split-Path -Parent $MyInvocation.MyCommand.Path }
+$root = (Resolve-Path (Join-Path $here "..")).Path
+$goBin = Join-Path $root ".tools\go\bin"
+$mingwBin = Join-Path $root ".tools\llvm-mingw\bin"
+if (Test-Path (Join-Path $mingwBin "gcc.exe")) {
+    $env:PATH = "$mingwBin;$goBin;$env:PATH"
+    $env:CC = Join-Path $mingwBin "gcc.exe"
+} elseif (Test-Path (Join-Path $goBin "go.exe")) {
+    $env:PATH = "$goBin;$env:PATH"
+}
+if (Test-Path (Join-Path $root ".tools\gopath")) {
+    $env:GOMODCACHE = Join-Path $root ".tools\gopath\pkg\mod"
+    $env:GOPATH = Join-Path $root ".tools\gopath"
+    $env:GOCACHE = Join-Path $root ".tools\gocache"
+}

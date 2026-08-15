@@ -1,7 +1,12 @@
 # ModelRelay 部署指南
 
+当前版本：**0.2.0**
+
 本文档只有一条主流程：**Relay → 证书 → Agent → New API → 验收**。
 请从第 0 步开始执行。平台差异和手工安装放在文档末尾。
+
+安装器会下载 GitHub 上的 **latest** 发布包。0.2.0 起发布包包含
+`certmgr` 图形证书管理器（需对应操作系统的包；Fyne 程序在目标系统本地构建）。
 
 ## 0. 先确认部署信息
 
@@ -86,7 +91,40 @@ Agent CA → Agent 客户端证书 → Relay 校验
 Relay CA  → Relay 服务端证书 → Agent 校验
 ```
 
-以下命令使用发布包中的 `certctl`。CA 私钥只留在证书管理机。
+证书管理机无需常在线，只在签发或轮换时使用。CA 私钥只留在证书管理机，
+不要上传到 Relay、Agent 或 GitHub。目录权限：Windows 使用 ACL，Linux/macOS
+使用 `0700`/`0600`。请离线备份 `agent-ca.key` 和 `relay-ca.key`。
+
+### 2.0 使用证书管理器（推荐，0.2.0）
+
+从 [GitHub Release](https://github.com/Cardinal85/modelrelay/releases/latest)
+下载对应操作系统的发布包，运行其中的 `certmgr`（Windows 为 `certmgr.exe`）。
+覆盖 Windows、Linux 和 macOS：
+
+1. 创建或打开 Agent CA、Relay CA，查看主题和有效期。
+2. 导入 GPU 主机生成的 CSR，校验 CN / URI SAN 与 `node_id` 后签发 `.crt`。
+3. 填写 CN、DNS SAN、IP SAN 和有效期，签发 Relay 服务端 `.crt` 与 `.key`。
+4. 检查 Subject、Issuer、Serial、SAN、用途和有效期；临期或过期会提示。
+5. 分别导出 Relay 与 Agent 部署文件。Agent 私钥必须在 GPU 主机用 `certctl csr`
+   本地生成，证书管理器不会代生成，也不会导出 `*.key` 到 Agent 目录。
+6. 可选：登录 Relay 管理 API（`/api/login`）查看证书并吊销。使用会话 Cookie，
+   不保存管理员密码。吊销由 Relay 数据库即时生效。
+
+从源码构建时，Fyne 桌面程序需要在目标操作系统上启用 CGO。
+Windows 请先加载 `scripts/goenv.ps1`（使用 `.tools/llvm-mingw`，不要用
+CodeBlocks MinGW 8.1，否则生成的 `certmgr.exe` 无法在 Windows 11 运行）：
+
+```powershell
+powershell -File scripts/build.ps1
+```
+
+Linux 或 macOS：
+
+```bash
+bash scripts/build-certmgr.sh
+```
+
+仍可使用下面的 `certctl` 命令完成同样流程。
 
 ### 2.1 创建 CA（证书管理机）
 

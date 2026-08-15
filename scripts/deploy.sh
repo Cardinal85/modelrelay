@@ -3,9 +3,9 @@
 # ModelRelay 一键部署脚本（Linux / macOS）
 #
 # 示例：
-#   sudo ./scripts/deploy.sh --source-dir ./dist/modelrelay-0.1.0-linux-amd64 \
+#   sudo ./scripts/deploy.sh --source-dir ./dist/modelrelay-0.2.0-linux-amd64 \
 #     --component relay
-#   sudo ./scripts/deploy.sh --source-dir ./dist/modelrelay-0.1.0-linux-amd64 \
+#   sudo ./scripts/deploy.sh --source-dir ./dist/modelrelay-0.2.0-linux-amd64 \
 #     --component agent --node-id gpu-001 \
 #     --relay-url wss://relay.example.com:9443/agent/v1/connect
 #
