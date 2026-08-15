@@ -60,11 +60,13 @@
 
 ## 4. 路径与目录约定
 
-| 平台 | 配置目录 |
-|---|---|
-| Linux | `/etc/model-agent/` |
-| Windows | `%PROGRAMDATA%\ModelAgent\` |
-| macOS | `/Library/Application Support/ModelAgent/` |
+| 平台 | Relay 配置 | Agent 配置 | 二进制 |
+|---|---|---|---|
+| Linux | `/etc/modelrelay/` | `/etc/model-agent/` | `/opt/modelrelay/bin/` |
+| Windows（安装器默认） | `C:\ModelRelay\etc\relay\` | `C:\ModelRelay\etc\agent\` | `C:\ModelRelay\bin\` |
+| macOS | `/Library/Application Support/ModelRelay/` | `/Library/Application Support/ModelAgent/` | `/usr/local/libexec/modelrelay/` |
+
+完整部署步骤、Windows 生成 CSR、域名和反代见 [部署与运维指南](deployment.md)。
 
 ## 5. 环境变量引用
 

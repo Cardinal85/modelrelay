@@ -30,10 +30,45 @@ MODEL_URL=http://127.0.0.1:8000/v1
 
 | 端口 | 用途 | 建议 |
 |---|---|---|
-| `9443/tcp` | Agent → Relay WSS | 只允许 GPU 网段 |
-| `9100/tcp` | New API → Relay API | 只允许 New API 网段 |
-| `9200/tcp` | 管理 WebUI | 只监听本机或管理网 |
-| `8000/tcp` | Agent → 本地模型 | 只监听模型机本机 |
+| `9443/tcp` | Agent → Relay WSS/mTLS | 只允许 GPU 网段；可 TCP 透传，禁止 TLS 终止 |
+| `9100/tcp` | New API → Relay API | 只允许 New API 网段；可 HTTPS 反代 |
+| `9200/tcp` | 管理 WebUI | 只监听本机或管理网；优先 SSH 隧道 |
+| `8000/tcp` | Agent → 本地模型 | 只监听模型机本机，不要对 Relay 开放 |
+
+GPU 主机通常在 NAT/防火墙后面，**不需要公网 IP**。Agent 主动连出 `9443` 即可。
+需要公网或端口映射的是 **Relay 的 `9443`**（以及 New API 能访问到的 `9100`）。
+
+### 0.1 域名怎么定
+
+三个入口用途不同，**不要**把 Agent 的 WSS/mTLS 和 New API 的 HTTP 混在同一个 HTTPS 反代后面。
+
+| 用途 | 建议主机名 | Agent / 客户端填写 | 谁连接 |
+|---|---|---|---|
+| Agent 接入 | `relay.example.com` | `wss://relay.example.com:9443/agent/v1/connect` | 各 GPU 上的 Agent |
+| New API 上游 | 同机用回环；分机用 `api.example.com` | New API Base URL：`http://127.0.0.1:9100/v1` 或 `https://api.example.com/v1` | New API |
+| WebUI | 不要公开域名 | SSH 隧道后打开 `http://127.0.0.1:9200/` | 管理员 |
+
+填写时把 `example.com` 换成你的真实域名或内网名字。没有域名时可以用 IP，但证书 SAN 和 URL 必须用同一个 IP。
+
+推荐的 DNS：
+
+```text
+relay.example.com     A/AAAA    Relay 公网或内网 IP     （Agent 用，DNS 仅解析，不要做七层代理）
+api.example.com       A/AAAA    与 New API 互通的地址   （可选；反代到 Relay :9100）
+```
+
+规则：
+
+1. Agent 配置里的主机名（或 IP）**必须**出现在 Relay 服务端证书的 DNS SAN 或 IP SAN。
+2. 证书 CN 建议与主域名相同，例如 `relay.example.com`；实际校验看 SAN。
+3. GPU 若写 `wss://203.0.113.10:9443/...`，签发时必须 `-ip 203.0.113.10`。
+4. GPU 若写 `wss://relay.example.com:9443/...`，签发时必须 `-dns relay.example.com`，且 GPU 能解析到 Relay。
+5. **不要**给 `9443` 套 Let's Encrypt 再做 TLS 终止。Agent 用 Relay CA 校验服务端，并且要出示客户端证书。`9443` 只能直连或 **TCP 透传**。
+6. Cloudflare 橙色云、阿里云/腾讯云七层 HTTPS、AWS ALB 会拆掉 mTLS，**不能**用在 `9443`。
+7. New API 的 Base URL 主机名可以和 Agent 入口不同。
+8. 主备 Relay 用两个名字，例如 `relay-a.example.com`、`relay-b.example.com`，各签发一张 SAN 正确的服务端证书。
+
+完整反代、防火墙和证书 SAN 对照见文末 **第 9 节**。
 
 ## 1. 安装 Relay
 
@@ -73,6 +108,26 @@ Invoke-WebRequest -UseBasicParsing `
   -OutFile $p
 powershell -ExecutionPolicy Bypass -File $p -Component Relay
 ```
+
+安装结果：
+
+```text
+程序：C:\ModelRelay\bin\relay.exe、certctl.exe
+配置：C:\ModelRelay\etc\relay\relay.yaml
+环境：C:\ModelRelay\etc\relay\relay.env
+数据：C:\ModelRelay\data\modelrelay.db
+服务：NSSM 的 ModelRelayRelay，或任务计划 ModelRelay-Relay
+```
+
+在 Relay 这台 Windows 上放行 Agent 网段访问 `9443`（不要对公网全开）：
+
+```powershell
+New-NetFirewallRule -DisplayName "ModelRelay Agent WSS" `
+  -Direction Inbound -Protocol TCP -LocalPort 9443 -Action Allow `
+  -RemoteAddress 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+`9100` / `9200` 默认只监听 `127.0.0.1`，一般不必对公网放行。
 
 macOS 使用：
 
@@ -142,21 +197,81 @@ certctl init-ca \
 
 `certctl init-ca` 会在每个目录生成 `agent-ca.crt` 和 `agent-ca.key`。
 
-### 2.2 生成 Agent CSR（GPU 主机）
+### 2.2 生成 Agent CSR（必须在 GPU 主机上）
 
-在 GPU 主机本地生成私钥，私钥不要上传到证书管理机：
+私钥只在这台 GPU 本机生成。**不要**在证书管理机、Relay 或另一台电脑上代生成，
+也**不要**把 `.key` 拷走。`node_id`、证书 CN、CSR 的 `-cn` 必须是同一个值，
+例如 `gpu-001`。
+
+先确认本机已有 `certctl`：Linux/macOS 安装 Agent 后在 `/opt/modelrelay/bin/certctl`
+或 `/usr/local/libexec/modelrelay/certctl`；Windows 在 `C:\ModelRelay\bin\certctl.exe`。
+也可以先解压发布包，只用其中的 `certctl`，稍后再装服务。
+
+#### Linux GPU
 
 ```bash
+sudo mkdir -p /etc/model-agent
 sudo /opt/modelrelay/bin/certctl csr \
   -cn gpu-001 \
   -out /etc/model-agent
+sudo chmod 600 /etc/model-agent/gpu-001.key
 ```
 
 生成：
 
 ```text
-/etc/model-agent/gpu-001.key
-/etc/model-agent/gpu-001.csr
+/etc/model-agent/gpu-001.key    # 留下，禁止拷走
+/etc/model-agent/gpu-001.csr    # 只把这个拿到证书管理机
+```
+
+#### Windows GPU
+
+管理员 PowerShell。若尚未安装 Agent，可先只拷贝 `certctl.exe`，或带 `-NoStart` 安装：
+
+```powershell
+$p = Join-Path $env:TEMP "modelrelay-install.ps1"
+Invoke-WebRequest -UseBasicParsing `
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
+  -OutFile $p
+powershell -ExecutionPolicy Bypass -File $p `
+  -Component Agent `
+  -NodeId gpu-001 `
+  -RelayUrl "wss://relay.example.com:9443/agent/v1/connect" `
+  -LocalBaseUrl "http://127.0.0.1:8000/v1" `
+  -NoStart
+```
+
+生成 CSR（`-cn` 必须等于后面 `agent.yaml` 里的 `node_id`）：
+
+```powershell
+New-Item -ItemType Directory -Force -Path C:\ModelRelay\etc\agent | Out-Null
+C:\ModelRelay\bin\certctl.exe csr -cn gpu-001 -out C:\ModelRelay\etc\agent
+icacls C:\ModelRelay\etc\agent\gpu-001.key /inheritance:r /grant:r "SYSTEM:F" "Administrators:F"
+```
+
+生成：
+
+```text
+C:\ModelRelay\etc\agent\gpu-001.key
+C:\ModelRelay\etc\agent\gpu-001.csr
+```
+
+把 `gpu-001.csr` 拷到证书管理机，可用 U 盘、内网 SMB，或本机已启用的 OpenSSH：
+
+```powershell
+scp C:\ModelRelay\etc\agent\gpu-001.csr user@ca-pc:D:\csr\gpu-001.csr
+```
+
+不要把 `.key` 放进邮件、网盘或聊天工具。
+
+#### macOS GPU
+
+```bash
+sudo mkdir -p "/Library/Application Support/ModelAgent"
+sudo /usr/local/libexec/modelrelay/certctl csr \
+  -cn gpu-001 \
+  -out "/Library/Application Support/ModelAgent"
+sudo chmod 600 "/Library/Application Support/ModelAgent/gpu-001.key"
 ```
 
 只把 `gpu-001.csr` 复制到证书管理机。
@@ -173,12 +288,41 @@ certctl issue \
   -out ./issued
 ```
 
-生成 `./issued/gpu-001.crt`，把它复制回 GPU 主机的
-`/etc/model-agent/gpu-001.crt`。
+生成 `./issued/gpu-001.crt`。把它复制回 GPU，**不要**覆盖 GPU 上已有的 `.key`。
+
+Linux：
+
+```bash
+sudo install -m 0644 gpu-001.crt /etc/model-agent/gpu-001.crt
+```
+
+Windows（在 GPU 上）：
+
+```powershell
+Copy-Item -Force gpu-001.crt C:\ModelRelay\etc\agent\gpu-001.crt
+```
+
+macOS：
+
+```bash
+sudo install -m 0644 gpu-001.crt \
+  "/Library/Application Support/ModelAgent/gpu-001.crt"
+```
 
 ### 2.4 签发 Relay 服务端证书（证书管理机）
 
-证书的 DNS/IP SAN 必须包含 Agent 实际连接时使用的地址：
+证书的 DNS/IP SAN 必须包含 **Agent 实际连接时使用的地址**（与 `relays[].url` 一致）。
+`certctl init-ca` 在每个目录都生成名为 `agent-ca.crt` / `agent-ca.key` 的文件，
+用目录区分两套 CA，不要搞混：
+
+```text
+./ca/agent/agent-ca.crt     Agent CA 公钥（放到 Relay，用来校验 GPU 证书）
+./ca/agent/agent-ca.key     Agent CA 私钥（只留证书管理机）
+./ca/relay/agent-ca.crt     Relay CA 公钥（放到 GPU，用来校验 Relay 证书；导出时常改名为 relay-ca.crt）
+./ca/relay/agent-ca.key     Relay CA 私钥（只留证书管理机）
+```
+
+Agent 用域名连接：
 
 ```bash
 certctl server-cert \
@@ -186,10 +330,26 @@ certctl server-cert \
   -ca-key ./ca/relay/agent-ca.key \
   -cn relay.example.com \
   -dns relay.example.com \
-  -ip 203.0.113.10 \
   -days 365 \
   -out ./issued
 ```
+
+同时支持域名和 IP（内网 GPU 写 IP、外网 GPU 写域名时都要写上）：
+
+```bash
+certctl server-cert \
+  -ca ./ca/relay/agent-ca.crt \
+  -ca-key ./ca/relay/agent-ca.key \
+  -cn relay.example.com \
+  -dns relay.example.com,relay-a.example.com \
+  -ip 203.0.113.10,10.0.0.10 \
+  -days 365 \
+  -out ./issued
+```
+
+`certmgr` 图形界面里同样填写 CN、DNS SAN、IP SAN。导出 Relay 目录会得到
+`relay.crt`、`relay.key`、`agent-ca.crt`；导出 Agent 目录会得到
+`gpu-001.crt`、`relay-ca.crt`（不含私钥）。
 
 生成 `relay.example.com.crt` 和 `relay.example.com.key`。
 后文将它们分别复制为 Relay 的 `relay.crt` 和 `relay.key`。
@@ -197,6 +357,8 @@ certctl server-cert \
 ## 3. 配置并验证 Relay
 
 ### 3.1 复制 Relay 证书
+
+Linux：
 
 ```bash
 sudo install -m 0644 relay.example.com.crt /etc/modelrelay/relay.crt
@@ -206,6 +368,29 @@ sudo chown modelrelay:modelrelay \
   /etc/modelrelay/relay.crt \
   /etc/modelrelay/relay.key \
   /etc/modelrelay/agent-ca.crt
+```
+
+Windows（管理员 PowerShell，在 Relay 主机上）：
+
+```powershell
+$d = "C:\ModelRelay\etc\relay"
+Copy-Item -Force relay.example.com.crt "$d\relay.crt"
+Copy-Item -Force relay.example.com.key "$d\relay.key"
+Copy-Item -Force agent-ca.crt "$d\agent-ca.crt"
+icacls "$d\relay.key" /inheritance:r /grant:r "SYSTEM:F" "Administrators:F"
+```
+
+若用 `certmgr` 导出目录，三个文件已经叫 `relay.crt`、`relay.key`、`agent-ca.crt`，直接拷进 `$d`。
+
+macOS：
+
+```bash
+sudo install -m 0644 relay.example.com.crt \
+  "/Library/Application Support/ModelRelay/relay.crt"
+sudo install -m 0600 relay.example.com.key \
+  "/Library/Application Support/ModelRelay/relay.key"
+sudo install -m 0644 ./ca/agent/agent-ca.crt \
+  "/Library/Application Support/ModelRelay/agent-ca.crt"
 ```
 
 ### 3.2 检查配置
@@ -222,9 +407,24 @@ admin:
   listen: "127.0.0.1:9200"
 ```
 
-不要把 `9100` 或 `9200` 直接暴露到公网。
+不要把 `9100` 或 `9200` 直接暴露到公网。Windows 配置在
+`C:\ModelRelay\etc\relay\relay.yaml`，证书路径改成：
+
+```yaml
+http_listen: "127.0.0.1:9100"
+wss_listen: "0.0.0.0:9443"
+tls_cert: "C:\\ModelRelay\\etc\\relay\\relay.crt"
+tls_key: "C:\\ModelRelay\\etc\\relay\\relay.key"
+agent_ca: "C:\\ModelRelay\\etc\\relay\\agent-ca.crt"
+admin:
+  listen: "127.0.0.1:9200"
+store:
+  db_path: "C:\\ModelRelay\\data\\modelrelay.db"
+```
 
 ### 3.3 启动并检查
+
+Linux：
 
 ```bash
 sudo systemctl restart modelrelay-relay
@@ -232,8 +432,22 @@ sudo systemctl status modelrelay-relay --no-pager
 sudo journalctl -u modelrelay-relay -n 100 --no-pager
 ```
 
-服务必须是 `active (running)`。如果失败，先修复日志中的证书或配置问题，
-不要继续安装 Agent。
+Windows：
+
+```powershell
+Restart-Service ModelRelayRelay -ErrorAction SilentlyContinue
+if (-not $?) { Start-ScheduledTask -TaskName "ModelRelay-Relay" }
+Get-Content C:\ModelRelay\data\ModelRelayRelay.err.log -Tail 80
+```
+
+macOS：
+
+```bash
+sudo launchctl kickstart -k system/com.modelrelay.relay
+sudo tail -n 80 /var/log/modelrelay-relay.err
+```
+
+服务必须正常运行。如果失败，先修复日志中的证书或配置问题，不要继续安装 Agent。
 
 ### 3.4 验证 Relay API 和 WebUI
 
@@ -241,6 +455,12 @@ sudo journalctl -u modelrelay-relay -n 100 --no-pager
 
 ```bash
 sudo sed -n 's/^RELAY_ADMIN_PASSWORD=//p' /etc/modelrelay/relay.env
+```
+
+Windows：
+
+```powershell
+Select-String -Path C:\ModelRelay\etc\relay\relay.env -Pattern '^RELAY_ADMIN_PASSWORD='
 ```
 
 验证模型目录：
@@ -252,10 +472,23 @@ curl -i http://127.0.0.1:9100/v1/models \
 unset TOKEN
 ```
 
+Windows：
+
+```powershell
+$token = (Select-String -Path C:\ModelRelay\etc\relay\relay.env -Pattern '^RELAY_INTERNAL_TOKEN=(.+)$').Matches.Groups[1].Value
+curl.exe -i http://127.0.0.1:9100/v1/models -H "Authorization: Bearer $token"
+```
+
 WebUI 默认只监听 `127.0.0.1:9200`。远程查看：
 
 ```bash
 ssh -L 9200:127.0.0.1:9200 root@relay.example.com
+```
+
+Windows 客户端可用：
+
+```powershell
+ssh -L 9200:127.0.0.1:9200 administrator@relay.example.com
 ```
 
 浏览器打开 `http://127.0.0.1:9200/`，使用 `admin` 登录。
@@ -264,26 +497,80 @@ ssh -L 9200:127.0.0.1:9200 root@relay.example.com
 
 ### 4.1 安装 Agent
 
-在 GPU 主机执行：
+先确认本机模型服务已监听（常见为 `http://127.0.0.1:8000/v1`）。vLLM / SGLang / Ollama / llama.cpp / LM Studio 均可，只要提供 OpenAI-compatible 接口。
+
+#### Linux GPU
 
 ```bash
 curl -fsSL \
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.sh \
   | sudo bash -s -- --component agent \
     --node-id gpu-001 \
-    --relay-url wss://relay.example.com:9443/agent/v1/connect
+    --relay-url wss://relay.example.com:9443/agent/v1/connect \
+    --local-base-url http://127.0.0.1:8000/v1
+```
+
+#### Windows GPU
+
+管理员 PowerShell。若第 2.2 节已经用 `-NoStart` 装过，可跳过安装，只补证书和配置：
+
+```powershell
+$p = Join-Path $env:TEMP "modelrelay-install.ps1"
+Invoke-WebRequest -UseBasicParsing `
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
+  -OutFile $p
+powershell -ExecutionPolicy Bypass -File $p `
+  -Component Agent `
+  -NodeId gpu-001 `
+  -RelayUrl "wss://relay.example.com:9443/agent/v1/connect" `
+  -LocalBaseUrl "http://127.0.0.1:8000/v1"
+```
+
+GPU 在 NAT 后面即可，一般只需允许**出站** TCP `9443`。Windows 默认出站是放行的。
+
+#### macOS GPU
+
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.sh \
+  | sudo bash -s -- --component agent \
+    --node-id gpu-001 \
+    --relay-url wss://relay.example.com:9443/agent/v1/connect \
+    --local-base-url http://127.0.0.1:8000/v1
 ```
 
 ### 4.2 复制 Agent 证书
 
+把证书管理机签发的 `gpu-001.crt` 和 Relay CA 公钥 `relay-ca.crt` 拷回 GPU。
+私钥 `gpu-001.key` 必须已经在第 2.2 节生成本机，不要从别处拷过来覆盖。
+
+Linux：
+
 ```bash
 sudo install -m 0644 gpu-001.crt /etc/model-agent/gpu-001.crt
-sudo install -m 0600 gpu-001.key /etc/model-agent/gpu-001.key
-sudo install -m 0644 ./ca/relay/agent-ca.crt /etc/model-agent/relay-ca.crt
+sudo install -m 0644 relay-ca.crt /etc/model-agent/relay-ca.crt
 sudo chown modelrelay:modelrelay \
   /etc/model-agent/gpu-001.crt \
   /etc/model-agent/gpu-001.key \
   /etc/model-agent/relay-ca.crt
+```
+
+Windows：
+
+```powershell
+$d = "C:\ModelRelay\etc\agent"
+Copy-Item -Force gpu-001.crt "$d\gpu-001.crt"
+Copy-Item -Force relay-ca.crt "$d\relay-ca.crt"
+# gpu-001.key 必须仍是本机 certctl csr 生成的那份
+```
+
+macOS：
+
+```bash
+sudo install -m 0644 gpu-001.crt \
+  "/Library/Application Support/ModelAgent/gpu-001.crt"
+sudo install -m 0644 relay-ca.crt \
+  "/Library/Application Support/ModelAgent/relay-ca.crt"
 ```
 
 ### 4.3 检查 Agent 配置
@@ -305,11 +592,32 @@ local:
   tls_verify: true
 ```
 
+Windows 对应 `C:\ModelRelay\etc\agent\agent.yaml`：
+
+```yaml
+node_id: gpu-001
+relays:
+  - url: "wss://relay.example.com:9443/agent/v1/connect"
+    priority: 1
+tls:
+  cert: "C:\\ModelRelay\\etc\\agent\\gpu-001.crt"
+  key: "C:\\ModelRelay\\etc\\agent\\gpu-001.key"
+  ca: "C:\\ModelRelay\\etc\\agent\\relay-ca.crt"
+  insecure_skip_verify: false
+local:
+  base_url: "http://127.0.0.1:8000/v1"
+  tls_verify: true
+```
+
+`relays[].url` 的主机名必须能解析，且与 Relay 证书 SAN 一致。不要把 `insecure_skip_verify` 设为 true。
+
 先确认本地模型服务：
 
 ```bash
 curl -fsS http://127.0.0.1:8000/v1/models
 ```
+
+Windows：`curl.exe -fsS http://127.0.0.1:8000/v1/models`
 
 再启动 Agent：
 
@@ -317,6 +625,21 @@ curl -fsS http://127.0.0.1:8000/v1/models
 sudo systemctl restart modelrelay-agent
 sudo systemctl status modelrelay-agent --no-pager
 sudo journalctl -u modelrelay-agent -n 100 --no-pager
+```
+
+Windows：
+
+```powershell
+Restart-Service ModelRelayAgent -ErrorAction SilentlyContinue
+if (-not $?) { Start-ScheduledTask -TaskName "ModelRelay-Agent" }
+Get-Content C:\ModelRelay\data\ModelRelayAgent.err.log -Tail 80
+```
+
+macOS：
+
+```bash
+sudo launchctl kickstart -k system/com.modelrelay.agent
+sudo tail -n 80 /var/log/modelrelay-agent.err
 ```
 
 ## 5. 验证节点并接入 New API
@@ -338,8 +661,10 @@ Relay 地址 DNS、两套 CA、证书 SAN、证书身份和 `node_id`。
 新增 OpenAI-compatible 渠道：
 
 ```text
-Base URL: http://relay.example.com:9100/v1
-密钥:     /etc/modelrelay/relay.env 中的 RELAY_INTERNAL_TOKEN
+Base URL: http://127.0.0.1:9100/v1          # New API 与 Relay 同机
+# 或    https://api.example.com/v1          # 分机且已按第 9 节做 HTTPS 反代
+# 不要用 wss://relay.example.com:9443       # 那是 Agent 入口，New API 连不上
+密钥:     Relay 的 RELAY_INTERNAL_TOKEN
 ```
 
 先同步 `GET /v1/models`，再测试 Chat 非流式和 SSE 流式请求。
@@ -589,11 +914,264 @@ sudo cp -a /etc/model-agent /backup/modelrelay/
 |---|---|
 | `source directory not found` | 使用 `scripts/install.sh`，不要手写旧版本目录 |
 | Relay 启动失败 | Relay 日志、证书路径、权限和 `relay.yaml` |
-| Agent TLS 失败 | 两套 CA、证书 SAN、`node_id` 和系统时间 |
-| 节点 offline | Relay `9443` 防火墙、DNS 和 Agent 日志 |
+| Agent TLS 失败 | 两套 CA、证书 SAN 是否包含 URL 主机名、`node_id` 与 CN、系统时间 |
+| `x509: certificate is valid for ... not ...` | Agent URL 主机名不在 Relay 证书 SAN；重新签发并填对 `-dns`/`-ip` |
+| `uri is not listable`（certmgr 浏览） | 使用含原生文件对话框的 Windows `certmgr.exe`（v0.2.0 更新后的 `modelrelay-windows-amd64.zip`） |
+| 节点 offline | Relay `9443` 防火墙、GPU 出站、DNS、是否被七层 HTTPS 反代拆掉 mTLS |
+| 反代后 Agent 立刻断开 | `9443` 被 nginx/Caddy/IIS/云 WAF 做了 TLS 终止；改为 TCP 透传或直连 |
 | `model_not_found` | 本地模型服务 `/v1/models` 和模型名称 |
 | `capability_not_supported` | 等待能力探测完成或重新探测 |
 | 请求 `429` | 节点并发、队列长度和模型服务负载 |
-| 请求 `504` | 本地模型响应时间和超时配置 |
+| 请求 `504` | 本地模型响应时间和超时配置；反代 `proxy_read_timeout` 是否过短 |
+| SSE 卡住或一次性刷出 | 反代开启了缓冲；见第 9 节 `proxy_buffering off` |
 | WebUI `401` | 管理员密码和会话是否过期 |
+| Windows 服务起不来 | 任务计划/NSSM 是否管理员安装；查看 `C:\ModelRelay\data\*.err.log` |
+| Windows `此应用无法运行` | `certmgr.exe` 需用 llvm-mingw CGO 构建，不要用 CodeBlocks MinGW 8.1 |
+
+## 9. 域名、反代、防火墙和证书 SAN
+
+这一节回答：Relay 前面要不要反代、域名填什么、GPU 怎么连、各云和各系统怎么放行。
+
+### 9.1 先分清三条连接
+
+```text
+GPU Agent  --TCP 9443 mTLS-->  Relay wss_listen     （必须原样 TLS，可 TCP 透传）
+New API    --HTTP 9100------>  Relay http_listen    （可 HTTPS 反代）
+管理员     --HTTP 9200------>  Relay admin.listen   （优先 SSH 隧道，不要公网）
+```
+
+| 入口 | 默认监听 | 能否七层 HTTPS 反代 | 证书 |
+|---|---|---|---|
+| Agent WSS | `0.0.0.0:9443` | **否**。只能直连或四层 TCP 透传 | Relay CA 签发的服务端证书 + Agent 客户端证书 |
+| New API | `127.0.0.1:9100` | **可以**。nginx/Caddy/IIS 终止 TLS 后转到 9100 | 可用 Let's Encrypt，与 Agent 证书无关 |
+| WebUI | `127.0.0.1:9200` | 可以但不建议公开 | 同上；更好的做法是 SSH `-L 9200` |
+
+常见错误：把 `wss://relay.example.com:443` 指到 nginx，用网站证书。Agent 会校验 Relay CA，且必须出示客户端证书，握手失败。
+
+### 9.2 推荐拓扑
+
+**小规模（推荐）：Relay 自己听 9443，不反代 Agent。**
+
+1. 防火墙只对 GPU 网段开放 `9443/tcp`。
+2. Agent：`wss://relay.example.com:9443/agent/v1/connect`。
+3. New API 与 Relay 同机：Base URL `http://127.0.0.1:9100/v1`。
+4. WebUI 用 SSH 隧道。
+
+**New API 与 Relay 分机：** 只给 `9100` 做内网反代或内网防火墙放行，仍然不要把 `9100` 放到公网。
+
+**必须把 9443 放在负载均衡后面时：** 使用 **TCP/四层**（nginx `stream`、HAProxy TCP、AWS NLB、云厂商「TCP 转发」）。Relay 继续用自己的证书做 mTLS。负载均衡不要装网站证书。
+
+### 9.3 证书 SAN 与 URL 对照
+
+签发 Relay 服务端证书时，把 Agent 会用到的每一种连法都写进 SAN。
+
+| Agent 里的 `relays[].url` | 签发时至少包含 |
+|---|---|
+| `wss://relay.example.com:9443/agent/v1/connect` | `-dns relay.example.com` |
+| `wss://relay-a.example.com:9443/...` | `-dns relay-a.example.com` |
+| `wss://203.0.113.10:9443/...` | `-ip 203.0.113.10` |
+| 有的 GPU 用域名、有的用内网 IP | `-dns ...` **和** `-ip ...` 都写 |
+
+GPU 必须能解析该主机名。内网可用：
+
+- 内网 DNS（AD、dnsmasq、CoreDNS）
+- Windows `C:\Windows\System32\drivers\etc\hosts`
+- Linux `/etc/hosts`
+
+```text
+203.0.113.10    relay.example.com
+```
+
+hosts 里的名字也必须出现在证书 SAN 中。
+
+### 9.4 不要做的反代
+
+- Cloudflare 橙色云（Proxied）、CDN、WAF 七层加速：会终止 TLS，mTLS 失效。`relay.example.com` 必须 **仅 DNS**（灰色云）。
+- 阿里云 SLB/CLB HTTPS、腾讯云 CLB HTTPS、AWS ALB、Azure Application Gateway：七层，不能用于 9443。
+- IIS ARR、Caddy `reverse_proxy`、nginx `http { }` 里的 `proxy_pass`：都是七层，不能用于 9443。
+- 把 Let's Encrypt 证书配到 Relay 的 `tls_cert`：Agent 拿着 `relay-ca.crt` 校验会失败。Relay 的 WSS 证书必须由 **Relay CA** 签发。
+- 把 New API 的 Base URL 写成 `wss://...:9443`。
+
+### 9.5 nginx：9443 TCP 透传（可选）
+
+同一台机器上 nginx 与 Relay 不能抢同一个 9443。让 Relay 改听本机高位端口，nginx 对外听 9443：
+
+`relay.yaml`：
+
+```yaml
+wss_listen: "127.0.0.1:19443"
+http_listen: "127.0.0.1:9100"
+```
+
+`/etc/nginx/nginx.conf` 的 `stream` 段（与 `http` 平级，不是 server 里）：
+
+```nginx
+stream {
+    server {
+        listen 9443;
+        proxy_pass 127.0.0.1:19443;
+        proxy_timeout 1d;
+        proxy_connect_timeout 10s;
+    }
+}
+```
+
+Agent 仍然连接 `wss://relay.example.com:9443/agent/v1/connect`。证书 SAN 用 `relay.example.com`，不要写成 `127.0.0.1`。
+
+### 9.6 nginx：只反代 New API（9100）
+
+给 New API 用 HTTPS。流式 SSE 必须关缓冲、拉长超时：
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name api.example.com;
+    ssl_certificate     /etc/letsencrypt/live/api.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.example.com/privkey.pem;
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:9100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization $http_authorization;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
+New API Base URL：`https://api.example.com/v1`。
+密钥仍是 `RELAY_INTERNAL_TOKEN`。限制源 IP 为 New API 主机。
+
+Windows 上可用官方 nginx for Windows，把 `stream` 和 `http` 同样配置；或 9443 不反代、只给 9100 做反代。
+
+### 9.7 Caddy（仅 9100）
+
+```caddy
+api.example.com {
+    reverse_proxy 127.0.0.1:9100 {
+        flush_interval -1
+        transport http {
+            read_timeout 1h
+        }
+    }
+}
+```
+
+不要用 Caddy 反代 9443，除非使用四层插件并且不做 TLS 终止。
+
+### 9.8 HAProxy TCP 透传 9443
+
+```
+frontend agent_wss
+    bind :9443
+    mode tcp
+    default_backend relay_wss
+
+backend relay_wss
+    mode tcp
+    server relay1 127.0.0.1:19443 check
+```
+
+### 9.9 云负载均衡怎么选
+
+| 产品 | 9443 Agent | 9100 New API |
+|---|---|---|
+| AWS NLB / GCP TCP / Azure LB（四层） | 可以，TCP 转发 | 可以，但不需要 |
+| AWS ALB / 七层 SLB / CDN | 不可以 | 可以（内网） |
+| Cloudflare Proxied | 不可以 | 不建议把内部 API 放到公网 CDN |
+| 路由器端口映射 | 可以：外网 9443 → Relay 9443 | 仅映射给 New API 所在网段 |
+
+安全组/防火墙示例：`9443` 来源 = GPU 出口 IP 或专线网段；`9100` 来源 = New API 主机；`9200` 不开放。
+
+### 9.10 Linux 防火墙
+
+firewalld：
+
+```bash
+sudo firewall-cmd --permanent --add-rich-rule='rule family=ipv4 source address=10.0.0.0/8 port port=9443 protocol=tcp accept'
+sudo firewall-cmd --reload
+```
+
+ufw：
+
+```bash
+sudo ufw allow from 10.0.0.0/8 to any port 9443 proto tcp
+```
+
+iptables 策略因发行版而异，原则相同：只放行 GPU 网段的 9443。
+
+### 9.11 Windows 防火墙（Relay 主机）
+
+见第 1 节。检查：
+
+```powershell
+Get-NetFirewallRule -DisplayName "*ModelRelay*" | Format-Table DisplayName, Direction, Action, Enabled
+Get-NetTCPConnection -LocalPort 9443 -ErrorAction SilentlyContinue
+```
+
+GPU 主机一般不用入站规则。若出站被拦：
+
+```powershell
+New-NetFirewallRule -DisplayName "ModelRelay Agent outbound" `
+  -Direction Outbound -Protocol TCP -RemotePort 9443 -Action Allow
+```
+
+### 9.12 Windows GPU 完整中间步骤（汇总）
+
+1. 本机先跑通模型：`curl.exe http://127.0.0.1:8000/v1/models`。
+2. 管理员安装 Agent（可 `-NoStart`），得到 `C:\ModelRelay\bin\certctl.exe`。
+3. `certctl.exe csr -cn gpu-001 -out C:\ModelRelay\etc\agent`，生成 `.key` 和 `.csr`。
+4. **只**把 `gpu-001.csr` 拷到证书管理机（U 盘 / SMB / `scp`）。
+5. 证书管理机用 `certmgr` 或 `certctl issue` 签发，导出 `gpu-001.crt` 和 `relay-ca.crt`。
+6. 拷回 GPU 的 `C:\ModelRelay\etc\agent\`，不要覆盖 `.key`。
+7. 编辑 `agent.yaml`：`node_id`、`relays[].url`、证书路径、`local.base_url`。
+8. 确认 GPU 能解析 `relay.example.com`（`nslookup` 或 `Test-NetConnection relay.example.com -Port 9443`）。
+9. 启动 `ModelRelayAgent` 或任务 `ModelRelay-Agent`。
+10. 看 `C:\ModelRelay\data\ModelRelayAgent.err.log`，再到 WebUI 确认 `online`。
+
+证书管理机可以是另一台 Windows 笔记本：解压 `modelrelay-windows-amd64.zip`，运行 `certmgr.exe`。CA 私钥不要放进 GPU 或 Relay。
+
+### 9.13 本地模型地址
+
+Agent 只连配置文件里的 `local.base_url`，防止 SSRF。
+
+| 本机推理 | 典型 `local.base_url` |
+|---|---|
+| vLLM | `http://127.0.0.1:8000/v1` |
+| SGLang | `http://127.0.0.1:30000/v1` |
+| Ollama | `http://127.0.0.1:11434/v1` |
+| llama.cpp server | `http://127.0.0.1:8080/v1` |
+| LM Studio（Windows） | `http://127.0.0.1:1234/v1` |
+
+若模型开了 API Key，写入 Agent 的 `agent.env`：`LOCAL_MODEL_API_KEY=...`。
+模型服务必须监听本机或 Agent 能访问的内网地址，不要对公网开放。
+
+### 9.14 多 GPU / 多节点
+
+每台 GPU：独立 `node_id`、独立 CSR、独立证书。不要共用私钥。
+多台可以连同一个 `wss://relay.example.com:9443/agent/v1/connect`。
+同一台机器两个 Agent 要用不同 `node_id` 和不同证书目录。
+
+## 10. 各平台路径与操作对照
+
+| 项目 | Linux | Windows | macOS |
+|---|---|---|---|
+| 安装 | `install.sh --component relay\|agent` | 管理员 `install.ps1 -Component Relay\|Agent` | `install.sh` |
+| 二进制 | `/opt/modelrelay/bin/` | `C:\ModelRelay\bin\` | `/usr/local/libexec/modelrelay/` |
+| Relay 配置 | `/etc/modelrelay/relay.yaml` | `C:\ModelRelay\etc\relay\relay.yaml` | `/Library/Application Support/ModelRelay/relay.yaml` |
+| Agent 配置 | `/etc/model-agent/agent.yaml` | `C:\ModelRelay\etc\agent\agent.yaml` | `/Library/Application Support/ModelAgent/agent.yaml` |
+| 生成 CSR | `certctl csr -cn gpu-001 -out /etc/model-agent` | `certctl.exe csr -cn gpu-001 -out C:\ModelRelay\etc\agent` | `certctl csr -out ".../ModelAgent"` |
+| 启动 Relay | `systemctl restart modelrelay-relay` | `Restart-Service ModelRelayRelay` 或任务计划 | `launchctl kickstart ...relay` |
+| 启动 Agent | `systemctl restart modelrelay-agent` | `Restart-Service ModelRelayAgent` 或任务计划 | `launchctl kickstart ...agent` |
+| 日志 | `journalctl -u modelrelay-*` | `C:\ModelRelay\data\*.log` | `/var/log/modelrelay-*.err` |
+| 证书管理器 | 对应系统发布包中的 `certmgr`（需该 OS 本地 CGO 构建） | `certmgr.exe`（windows-amd64 包已含） | 在 macOS 上 `build-certmgr.sh` |
+| 拷 CSR | `scp gpu-001.csr ca-host:` | `scp` / U 盘 / SMB | `scp` |
+
+手工 systemd / NSSM / launchd 见第 7 节。主备 Relay 见 7.4。日常备份、轮换、升级见第 8 节。
+
 

@@ -184,8 +184,13 @@ Base URL: http://<relay-host>:9100/v1
 
 ## 其他平台和详细文档
 
+Windows GPU 用 `certctl.exe csr` 在本机生成私钥和 CSR，只把 `.csr` 拿到证书管理机签发。
+Relay 的 `9443` 是 Agent mTLS 入口，只能直连或 TCP 透传，不能套网站 HTTPS 反代。
+域名、nginx/Caddy/云负载均衡、防火墙和各平台路径对照见
+[部署与运维指南](docs/deployment.md) 第 0.1、2.2、4、9、10 节。
+
 Windows 使用 `scripts/install.ps1`；macOS 使用 `install.sh` 后由 launchd 托管。
-平台差异、主备 Relay、备份和回滚见[部署与运维指南](docs/deployment.md)。
+主备 Relay、备份和回滚也在同一份部署文档里。
 
 - [配置说明](docs/config.md)
 - [New API 接入指南](docs/newapi.md)

@@ -17,7 +17,8 @@ Base URL:     http://127.0.0.1:9100/v1
 要点：
 
 - Relay HTTP 默认只监听 `127.0.0.1:9100`，New API 与 Relay 同机部署时直连即可。
-- 若 New API 与 Relay 分机，Relay 的 `http_listen` 需改为受保护内网地址，并确保不暴露公网。
+- 若 New API 与 Relay 分机，Relay 的 `http_listen` 需改为受保护内网地址，或用 nginx/Caddy 把 `https://api.example.com` 反代到 `127.0.0.1:9100`（SSE 须关闭缓冲、超时加长）。不要把 `9100` 暴露公网。
+- **不要**把 New API 的 Base URL 写成 Agent 的 `wss://relay.example.com:9443`。那是 GPU 接入地址，协议和证书都不同。域名怎么定、反代示例见 [部署指南第 9 节](deployment.md)。
 - 密钥即内部认证 Token，Relay 校验 `Authorization: Bearer <token>`。
 
 ## 2. 模型同步
