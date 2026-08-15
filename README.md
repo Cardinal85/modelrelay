@@ -91,6 +91,12 @@ curl -fsSL \
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.sh \
   -o deploy.sh
 chmod +x deploy.sh
+
+curl -fL \
+  https://github.com/Cardinal85/modelrelay/releases/download/v0.1.0/modelrelay-0.1.0-linux-amd64.zip \
+  -o modelrelay-0.1.0-linux-amd64.zip
+unzip -q modelrelay-0.1.0-linux-amd64.zip -d modelrelay-0.1.0-linux-amd64
+
 sudo ./deploy.sh --source-dir ./modelrelay-0.1.0-linux-amd64 --component relay
 ```
 
@@ -100,12 +106,18 @@ Windows：
 $url = "https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.ps1"
 $script = Join-Path $env:TEMP "modelrelay-deploy.ps1"
 Invoke-WebRequest -UseBasicParsing $url -OutFile $script
+
+$package = "https://github.com/Cardinal85/modelrelay/releases/download/v0.1.0/modelrelay-0.1.0-windows-amd64.zip"
+Invoke-WebRequest -UseBasicParsing $package -OutFile .\modelrelay-0.1.0-windows-amd64.zip
+Expand-Archive .\modelrelay-0.1.0-windows-amd64.zip -DestinationPath .\modelrelay-0.1.0-windows-amd64 -Force
+
 powershell -ExecutionPolicy Bypass -File $script `
   -SourceDir .\modelrelay-0.1.0-windows-amd64 -Component Relay
 ```
 
-远程执行前请检查脚本内容；生产环境建议使用固定版本 URL，
-不要直接使用可变的 `main` 分支。
+远程执行前请检查脚本内容；生产环境建议将脚本 URL 固定到 tag 或 commit，
+不要直接使用可变的 `main` 分支。只有下载部署脚本而没有下载并解压平台发布包，
+会出现 `source directory not found`。
 
 ## 文档
 
