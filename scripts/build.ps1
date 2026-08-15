@@ -18,8 +18,8 @@ $ErrorActionPreference = "Stop"
 # 不继承前一次交叉编译残留的目标环境。尤其是长驻 IDE/Shell 中，
 # -All 设置的 GOOS/GOARCH 若未清理，会让后续 go test 尝试启动
 # darwin/linux 测试二进制并报 “%1 is not a valid Win32 application”。
-$nativeGOOS = (& go env GOHOSTOS).Trim()
-$nativeGOARCH = (& go env GOHOSTARCH).Trim()
+$nativeGOOS = (((& go env GOHOSTOS) 2>$null | Select-Object -Last 1).ToString()).Trim().ToLowerInvariant()
+$nativeGOARCH = (((& go env GOHOSTARCH) 2>$null | Select-Object -Last 1).ToString()).Trim().ToLowerInvariant()
 $env:GOOS = $nativeGOOS
 $env:GOARCH = $nativeGOARCH
 $env:GOARM = $null
