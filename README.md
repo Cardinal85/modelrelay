@@ -93,11 +93,11 @@ curl -fsSL \
 chmod +x deploy.sh
 
 curl -fL \
-  https://github.com/Cardinal85/modelrelay/releases/download/v0.1.0/modelrelay-0.1.0-linux-amd64.zip \
-  -o modelrelay-0.1.0-linux-amd64.zip
-unzip -q modelrelay-0.1.0-linux-amd64.zip -d modelrelay-0.1.0-linux-amd64
+  https://github.com/Cardinal85/modelrelay/releases/latest/download/modelrelay-linux-amd64.zip \
+  -o modelrelay-linux-amd64.zip
+unzip -q modelrelay-linux-amd64.zip -d modelrelay-linux-amd64
 
-sudo ./deploy.sh --source-dir ./modelrelay-0.1.0-linux-amd64 --component relay
+sudo ./deploy.sh --source-dir ./modelrelay-linux-amd64 --component relay
 ```
 
 Windows：
@@ -107,12 +107,12 @@ $url = "https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/dep
 $script = Join-Path $env:TEMP "modelrelay-deploy.ps1"
 Invoke-WebRequest -UseBasicParsing $url -OutFile $script
 
-$package = "https://github.com/Cardinal85/modelrelay/releases/download/v0.1.0/modelrelay-0.1.0-windows-amd64.zip"
-Invoke-WebRequest -UseBasicParsing $package -OutFile .\modelrelay-0.1.0-windows-amd64.zip
-Expand-Archive .\modelrelay-0.1.0-windows-amd64.zip -DestinationPath .\modelrelay-0.1.0-windows-amd64 -Force
+$package = "https://github.com/Cardinal85/modelrelay/releases/latest/download/modelrelay-windows-amd64.zip"
+Invoke-WebRequest -UseBasicParsing $package -OutFile .\modelrelay-windows-amd64.zip
+Expand-Archive .\modelrelay-windows-amd64.zip -DestinationPath .\modelrelay-windows-amd64 -Force
 
 powershell -ExecutionPolicy Bypass -File $script `
-  -SourceDir .\modelrelay-0.1.0-windows-amd64 -Component Relay
+  -SourceDir .\modelrelay-windows-amd64 -Component Relay
 ```
 
 远程执行前请检查脚本内容；生产环境建议将脚本 URL 固定到 tag 或 commit，
