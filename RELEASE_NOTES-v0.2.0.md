@@ -18,6 +18,11 @@
 - Agent 私钥必须在 GPU 主机用 `certctl csr` 本地生成，不要由证书管理器代生成。
 - 请离线备份 `agent-ca.key` 和 `relay-ca.key`。
 - Fyne 桌面程序需要在目标操作系统上启用 CGO 构建。Windows 请使用 `scripts/goenv.ps1`（llvm-mingw）；Linux/macOS 使用 `scripts/build-certmgr.sh`。
+- Windows 上「浏览」使用系统文件对话框，避免中文系统下 Fyne 收藏夹路径（Documents/Downloads）导致 `uri is not listable`。
+
+## 更新记录
+
+- 2026-08-15：更新 Windows `certmgr.exe`，改为原生文件/文件夹选择框。请重新下载 `modelrelay-windows-amd64.zip`。
 
 ## 发布前检查
 

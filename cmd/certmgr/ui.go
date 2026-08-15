@@ -476,7 +476,13 @@ func pathRow(entry *widget.Entry, browse func()) fyne.CanvasObject {
 }
 
 func pickFolder(win fyne.Window, dest *widget.Entry) {
-	dialog.ShowFolderOpen(func(lu fyne.ListableURI, err error) {
+	if path, ok, used := nativePickFolder("选择目录", dest.Text); used {
+		if ok {
+			dest.SetText(path)
+		}
+		return
+	}
+	d := dialog.NewFolderOpen(func(lu fyne.ListableURI, err error) {
 		if err != nil {
 			dialog.ShowError(err, win)
 			return
@@ -486,9 +492,19 @@ func pickFolder(win fyne.Window, dest *widget.Entry) {
 		}
 		dest.SetText(uriToPath(lu))
 	}, win)
+	if loc := listableDir(dest.Text); loc != nil {
+		d.SetLocation(loc)
+	}
+	d.Show()
 }
 
 func pickFile(win fyne.Window, exts []string, dest *widget.Entry) {
+	if path, ok, used := nativePickFile("选择文件", dest.Text, exts); used {
+		if ok {
+			dest.SetText(path)
+		}
+		return
+	}
 	d := dialog.NewFileOpen(func(rc fyne.URIReadCloser, err error) {
 		if err != nil {
 			dialog.ShowError(err, win)
@@ -503,7 +519,35 @@ func pickFile(win fyne.Window, exts []string, dest *widget.Entry) {
 	if len(exts) > 0 {
 		d.SetFilter(storage.NewExtensionFileFilter(exts))
 	}
+	if loc := listableDir(dest.Text); loc != nil {
+		d.SetLocation(loc)
+	}
 	d.Show()
+}
+
+func listableDir(path string) fyne.ListableURI {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		path = certmgr.DefaultWorkspaceRoot()
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		parent := filepath.Dir(path)
+		if st, err = os.Stat(parent); err == nil && st.IsDir() {
+			path = parent
+		} else if home, herr := os.UserHomeDir(); herr == nil {
+			path = home
+		} else {
+			return nil
+		}
+	} else if !st.IsDir() {
+		path = filepath.Dir(path)
+	}
+	l, err := storage.ListerForURI(storage.NewFileURI(path))
+	if err != nil {
+		return nil
+	}
+	return l
 }
 
 func uriToPath(u fyne.URI) string {
