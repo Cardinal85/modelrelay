@@ -40,7 +40,7 @@ function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        Fail "请使用“以管理员身份运行”的 PowerShell 执行"
+        Fail "run this script in an elevated PowerShell (right-click Windows PowerShell, Run as administrator)"
     }
 }
 

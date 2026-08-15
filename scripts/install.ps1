@@ -7,7 +7,7 @@ ModelRelay latest 一键安装器（Windows）
   Invoke-WebRequest -UseBasicParsing `
     https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
     -OutFile $p
-  powershell -ExecutionPolicy Bypass -File $p -Component Relay
+  powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Relay
 #>
 [CmdletBinding()]
 param(
@@ -26,6 +26,42 @@ $ErrorActionPreference = "Stop"
 function Fail([string]$Message) {
     throw "install.ps1: $Message"
 }
+
+function Test-Administrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Request-Administrator {
+    if (Test-Administrator) {
+        return
+    }
+    $argList = New-Object System.Collections.Generic.List[string]
+    [void]$argList.Add("-NoProfile")
+    [void]$argList.Add("-ExecutionPolicy")
+    [void]$argList.Add("Bypass")
+    [void]$argList.Add("-File")
+    [void]$argList.Add($PSCommandPath)
+    foreach ($name in @("Component", "InstallRoot", "RelayId", "NodeId", "RelayUrl", "LocalBaseUrl")) {
+        if ($PSBoundParameters.ContainsKey($name)) {
+            [void]$argList.Add("-$name")
+            [void]$argList.Add("$($PSBoundParameters[$name])")
+        }
+    }
+    if ($NoStart) {
+        [void]$argList.Add("-NoStart")
+    }
+    Write-Host "requesting administrator approval ..."
+    $proc = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") `
+        -Verb RunAs -Wait -PassThru -ArgumentList $argList.ToArray()
+    if ($null -eq $proc) {
+        Fail "elevation was cancelled; right-click Windows PowerShell and Run as administrator"
+    }
+    exit $proc.ExitCode
+}
+
+Request-Administrator
 
 $architecture = $env:PROCESSOR_ARCHITEW6432
 if ([string]::IsNullOrWhiteSpace($architecture)) {

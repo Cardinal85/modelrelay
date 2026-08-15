@@ -99,15 +99,18 @@ sudo yum install -y curl unzip
 
 ### Windows 或 macOS
 
-Windows 使用管理员 PowerShell：
+Windows 请用**管理员** PowerShell（开始菜单搜索 Windows PowerShell → 右键「以管理员身份运行」）。
+若出现 `Invoke-Expression` / `C:\bin` 之类报错，来自本机 PowerShell 配置文件（例如美亚 DBus），与安装器无关；加 `-NoProfile` 即可避开：
 
 ```powershell
 $p = Join-Path $env:TEMP "modelrelay-install.ps1"
 Invoke-WebRequest -UseBasicParsing `
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
   -OutFile $p
-powershell -ExecutionPolicy Bypass -File $p -Component Relay
+powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Relay
 ```
+
+安装器若未提权，会弹出 UAC。不要在普通用户窗口里装。
 
 安装结果：
 
@@ -370,7 +373,7 @@ $p = Join-Path $env:TEMP "modelrelay-install.ps1"
 Invoke-WebRequest -UseBasicParsing `
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
   -OutFile $p
-powershell -ExecutionPolicy Bypass -File $p `
+powershell -NoProfile -ExecutionPolicy Bypass -File $p `
   -Component Agent `
   -NodeId gpu-001 `
   -RelayUrl "wss://relay.example.com:9443/agent/v1/connect" `
@@ -656,7 +659,7 @@ $p = Join-Path $env:TEMP "modelrelay-install.ps1"
 Invoke-WebRequest -UseBasicParsing `
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
   -OutFile $p
-powershell -ExecutionPolicy Bypass -File $p `
+powershell -NoProfile -ExecutionPolicy Bypass -File $p `
   -Component Agent `
   -NodeId gpu-001 `
   -RelayUrl "wss://relay.example.com:9443/agent/v1/connect" `

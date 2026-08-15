@@ -23,7 +23,7 @@
 ## 更新记录
 
 - 2026-08-15：更新 Windows `certmgr.exe`，改为原生文件/文件夹选择框。请重新下载 `modelrelay-windows-amd64.zip`。
-- 2026-08-15：补充卸载程序和证书（部署指南第 11 节），并精简仓库 README 为快速部署入口。
+- 2026-08-15：Windows 安装器在未提权时弹出 UAC；管理员提示改为英文以免乱码。请用管理员 PowerShell 并加 `-NoProfile`。
 
 ## 发布前检查
 

@@ -36,15 +36,15 @@ curl -fsSL https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/
     --relay-url wss://relay.example.com:9443/agent/v1/connect
 ```
 
-**Windows**（管理员 PowerShell）
+**Windows**（开始菜单搜索 Windows PowerShell → 右键「以管理员身份运行」。加 `-NoProfile` 可避开本机配置文件改 PATH 导致的报错）：
 
 ```powershell
 $p = Join-Path $env:TEMP "modelrelay-install.ps1"
 Invoke-WebRequest -UseBasicParsing `
   https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
   -OutFile $p
-powershell -ExecutionPolicy Bypass -File $p -Component Relay
-powershell -ExecutionPolicy Bypass -File $p -Component Agent `
+powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Relay
+powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Agent `
   -NodeId gpu-001 `
   -RelayUrl "wss://relay.example.com:9443/agent/v1/connect"
 ```
