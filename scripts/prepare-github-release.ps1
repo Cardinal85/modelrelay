@@ -48,7 +48,7 @@ function Copy-CommonFiles([string]$Destination) {
 
     $scripts = Join-Path $Destination "scripts"
     New-Item -ItemType Directory -Force -Path $scripts | Out-Null
-    foreach ($name in @("deploy.sh", "deploy.ps1")) {
+    foreach ($name in @("deploy.sh", "deploy.ps1", "install.sh", "install.ps1")) {
         $source = Join-Path $RepoRoot "scripts\$name"
         if (Test-Path $source) {
             Copy-Item -Force $source $scripts
@@ -118,7 +118,9 @@ function New-ReleaseZip([string]$Source, [string]$Destination) {
 foreach ($package in $packages) {
     $name = $package.Name
     $staging = Join-Path $VersionRoot $name
-    $zip = Join-Path $VersionRoot "$name.zip"
+    $prefix = "modelrelay-$Version-"
+    $stableName = "modelrelay-" + $name.Substring($prefix.Length) + ".zip"
+    $zip = Join-Path $VersionRoot $stableName
     if (Test-Path $staging) { Remove-Item -Recurse -Force $staging }
     if (Test-Path $zip) { Remove-Item -Force $zip }
 
@@ -144,13 +146,6 @@ foreach ($package in $packages) {
     New-ReleaseZip $staging $zip
     Remove-Item -Recurse -Force $staging
     Write-Output "created $zip"
-
-    $prefix = "modelrelay-$Version-"
-    $stableName = "modelrelay-" + $name.Substring($prefix.Length) + ".zip"
-    $stableZip = Join-Path $VersionRoot $stableName
-    if (Test-Path $stableZip) { Remove-Item -Force $stableZip }
-    Copy-Item -Force $zip $stableZip
-    Write-Output "created $stableZip"
 }
 
 $sumLines = foreach ($zip in Get-ChildItem -Path $VersionRoot -Filter "*.zip" | Sort-Object Name) {

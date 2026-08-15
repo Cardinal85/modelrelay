@@ -82,42 +82,39 @@ powershell -File scripts/prepare-github-release.ps1 -Version 0.1.0 -Clean
 
 ## 从 GitHub 获取部署脚本
 
-脚本已上传到 GitHub，可通过以下 Raw URL 下载：
+推荐使用 latest 一键安装器。它会自动识别操作系统和 CPU 架构，
+下载最新发布包、解压、检查二进制并执行部署。
 
 Linux/macOS：
 
 ```bash
 curl -fsSL \
-  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.sh \
-  -o deploy.sh
-chmod +x deploy.sh
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.sh \
+  | sudo bash -s -- --component relay
+```
 
-curl -fL \
-  https://github.com/Cardinal85/modelrelay/releases/latest/download/modelrelay-linux-amd64.zip \
-  -o modelrelay-linux-amd64.zip
-unzip -q modelrelay-linux-amd64.zip -d modelrelay-linux-amd64
+Agent 示例：
 
-sudo ./deploy.sh --source-dir ./modelrelay-linux-amd64 --component relay
+```bash
+curl -fsSL \
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.sh \
+  | sudo bash -s -- --component agent \
+    --node-id gpu-001 \
+    --relay-url wss://relay.example.com:9443/agent/v1/connect
 ```
 
 Windows：
 
 ```powershell
-$url = "https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.ps1"
-$script = Join-Path $env:TEMP "modelrelay-deploy.ps1"
-Invoke-WebRequest -UseBasicParsing $url -OutFile $script
-
-$package = "https://github.com/Cardinal85/modelrelay/releases/latest/download/modelrelay-windows-amd64.zip"
-Invoke-WebRequest -UseBasicParsing $package -OutFile .\modelrelay-windows-amd64.zip
-Expand-Archive .\modelrelay-windows-amd64.zip -DestinationPath .\modelrelay-windows-amd64 -Force
-
-powershell -ExecutionPolicy Bypass -File $script `
-  -SourceDir .\modelrelay-windows-amd64 -Component Relay
+$script = Join-Path $env:TEMP "modelrelay-install.ps1"
+Invoke-WebRequest -UseBasicParsing `
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
+  -OutFile $script
+powershell -ExecutionPolicy Bypass -File $script -Component Relay
 ```
 
-远程执行前请检查脚本内容；生产环境建议将脚本 URL 固定到 tag 或 commit，
-不要直接使用可变的 `main` 分支。只有下载部署脚本而没有下载并解压平台发布包，
-会出现 `source directory not found`。
+生产环境建议先检查脚本内容；如果需要固定版本，将 `main` 替换为对应的
+tag 或 commit。高级用法仍可直接调用发布包内的 `deploy.sh` / `deploy.ps1`。
 
 ## 文档
 
