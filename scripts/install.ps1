@@ -86,13 +86,31 @@ try {
     Invoke-WebRequest -UseBasicParsing $packageUrl -OutFile $packagePath
     Expand-Archive -LiteralPath $packagePath -DestinationPath $sourceDir
 
-    $deploy = Join-Path $sourceDir "scripts\deploy.ps1"
+    $exeRoot = $sourceDir
+    if (-not (Test-Path (Join-Path $exeRoot "agent.exe") -PathType Leaf)) {
+        $nested = Get-ChildItem -LiteralPath $sourceDir -Directory | Select-Object -First 1
+        if ($null -ne $nested -and (Test-Path (Join-Path $nested.FullName "agent.exe") -PathType Leaf)) {
+            $exeRoot = $nested.FullName
+        }
+    }
+    $deploy = Join-Path $exeRoot "scripts\deploy.ps1"
+    if (-not (Test-Path $deploy -PathType Leaf)) {
+        $deploy = Join-Path $sourceDir "scripts\deploy.ps1"
+    }
     if (-not (Test-Path $deploy -PathType Leaf)) {
         Fail "downloaded package is invalid: scripts\deploy.ps1 not found"
     }
+    try {
+        Write-Host "updating deploy.ps1 from GitHub ..."
+        Invoke-WebRequest -UseBasicParsing `
+          "https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/deploy.ps1" `
+          -OutFile $deploy
+    } catch {
+        Write-Host "using deploy.ps1 from the downloaded package"
+    }
 
     $parameters = @{
-        SourceDir = $sourceDir
+        SourceDir = $exeRoot
         Component = $Component
         InstallRoot = $InstallRoot
         RelayId = $RelayId

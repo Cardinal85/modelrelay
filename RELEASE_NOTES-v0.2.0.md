@@ -23,7 +23,7 @@
 ## 更新记录
 
 - 2026-08-15：更新 Windows `certmgr.exe`，改为原生文件/文件夹选择框。请重新下载 `modelrelay-windows-amd64.zip`。
-- 2026-08-15：修复 Windows 无 NSSM 时任务名错误（`ModelRelay-Agent` / `ModelRelay-Relay`），安装结束会打印正确的启动命令和日志路径。GPU 不要执行 Relay 启动命令。
+- 2026-08-15：修复 Windows 无 NSSM 时任务名错误（`ModelRelay-Agent` / `ModelRelay-Relay`），安装结束会打印正确的启动命令和日志路径。GPU 不要执行 Relay 启动命令。`install.ps1` 会再拉取最新 `deploy.ps1`，避免 ZIP 里的旧脚本。
 
 ## 发布前检查
 

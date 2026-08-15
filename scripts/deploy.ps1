@@ -62,7 +62,7 @@ function Ensure-Directory([string]$Path) {
 function Copy-Binary([string]$Name) {
     $source = Join-Path $SourceDir "$Name.exe"
     if (-not (Test-Path $source -PathType Leaf)) {
-        Fail "发布目录缺少 $source"
+        Fail "package is missing $source"
     }
     Copy-Item -Force $source (Join-Path $BinDir "$Name.exe")
 }

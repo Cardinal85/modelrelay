@@ -1291,8 +1291,23 @@ New-NetFirewallRule -DisplayName "ModelRelay Agent outbound" `
 6. 拷回 GPU 的 `C:\ModelRelay\etc\agent\`，不要覆盖 `.key`。
 7. 编辑 `agent.yaml`：`node_id`、`relays[].url`、证书路径、`local.base_url`。
 8. 确认 GPU 能解析 `relay.example.com`（`nslookup` 或 `Test-NetConnection relay.example.com -Port 9443`）。
-9. 启动 `ModelRelayAgent` 或任务 `ModelRelay-Agent`。
-10. 看 `C:\ModelRelay\data\ModelRelayAgent.err.log`，再到 WebUI 确认 `online`。
+9. 启动 Agent（不要在 GPU 上执行 `ModelRelayRelay` / `ModelRelay-Relay`）：
+
+   ```powershell
+   Get-Service ModelRelayAgent -ErrorAction SilentlyContinue
+   if ($?) { Restart-Service ModelRelayAgent }
+   else { Start-ScheduledTask -TaskName "ModelRelay-Agent" }
+   ```
+
+   若提示找不到任务，先查旧任务名，或直接前台运行：
+
+   ```powershell
+   Get-ScheduledTask | Where-Object { $_.TaskName -like "*ModelRelay*" } | Format-Table TaskName, State
+   Start-ScheduledTask -TaskName "ModelRelay-ModelRelayAgent" -ErrorAction SilentlyContinue
+   powershell -NoProfile -ExecutionPolicy Bypass -File C:\ModelRelay\bin\run-agent.ps1
+   ```
+
+10. 看日志：有 NSSM 时是 `C:\ModelRelay\data\ModelRelayAgent.err.log`，否则是 `C:\ModelRelay\data\agent.log`。再到 WebUI 确认 `online`。
 
 证书管理机可以是另一台 Windows 笔记本：解压 `modelrelay-windows-amd64.zip`，运行 `certmgr.exe`。CA 私钥不要放进 GPU 或 Relay。
 
