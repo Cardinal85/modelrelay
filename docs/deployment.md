@@ -319,27 +319,176 @@ Base URL: http://relay.example.com:9100/v1
 - [ ] 数据库、配置和证书公钥已备份。
 - [ ] CA 私钥、Agent 私钥、Relay 私钥和 Token 没有进入仓库。
 
-## 7. 其他部署方式
+## 7. 其他部署方案（保留完整手工方式）
 
-### 手工 Linux systemd
+主流程推荐一键安装；以下方案用于需要手工控制安装目录、权限或服务托管方式的场景。
 
-不使用一键脚本时，安装二进制到 `/opt/modelrelay/bin/`，
-配置放到 `/etc/modelrelay/` 和 `/etc/model-agent/`，
-再参考 `scripts/deploy.sh` 生成的 systemd 服务文件。
+### 7.1 Linux 手工 systemd
 
-### Windows 服务
+创建目录和服务用户：
 
-使用管理员 PowerShell 执行 `scripts/install.ps1`。
-生产环境优先使用 NSSM/WinSW；没有包装器时使用 Windows 任务计划。
+```bash
+sudo install -d -m 0750 /opt/modelrelay/bin /etc/modelrelay \
+  /etc/model-agent /var/lib/modelrelay
+sudo useradd --system --home /var/lib/modelrelay \
+  --shell /usr/sbin/nologin modelrelay || true
+```
 
-### macOS launchd
+从对应 Linux 发布包复制二进制：
 
-使用 `scripts/install.sh` 安装 Agent，再将其注册为
-`/Library/LaunchDaemons/com.modelrelay.agent.plist`。
+```bash
+sudo install -m 0755 relay agent certctl /opt/modelrelay/bin/
+sudo chown -R modelrelay:modelrelay /var/lib/modelrelay
+```
 
-### 主备 Relay
+Relay 服务文件 `/etc/systemd/system/modelrelay-relay.service`：
 
-在 Agent 配置两个 Relay 地址：
+```ini
+[Unit]
+Description=ModelRelay Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=modelrelay
+Group=modelrelay
+WorkingDirectory=/var/lib/modelrelay
+EnvironmentFile=/etc/modelrelay/relay.env
+ExecStart=/opt/modelrelay/bin/relay -config /etc/modelrelay/relay.yaml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/modelrelay
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Agent 服务文件 `/etc/systemd/system/modelrelay-agent.service`：
+
+```ini
+[Unit]
+Description=ModelRelay Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=modelrelay
+Group=modelrelay
+EnvironmentFile=/etc/model-agent/agent.env
+ExecStart=/opt/modelrelay/bin/agent -config /etc/model-agent/agent.yaml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+启用服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now modelrelay-relay
+sudo systemctl enable --now modelrelay-agent
+sudo systemctl status modelrelay-relay modelrelay-agent --no-pager
+```
+
+### 7.2 Windows NSSM、WinSW 或任务计划
+
+目录建议：
+
+```text
+C:\ModelRelay\bin\relay.exe
+C:\ModelRelay\bin\agent.exe
+C:\ModelRelay\etc\relay.yaml
+C:\ModelRelay\etc\agent.yaml
+C:\ModelRelay\data\
+```
+
+NSSM 示例：
+
+```powershell
+nssm install ModelRelayRelay C:\ModelRelay\bin\relay.exe
+nssm set ModelRelayRelay AppParameters "-config C:\ModelRelay\etc\relay.yaml"
+nssm set ModelRelayRelay AppDirectory C:\ModelRelay\data
+nssm set ModelRelayRelay Start SERVICE_AUTO_START
+nssm start ModelRelayRelay
+
+nssm install ModelRelayAgent C:\ModelRelay\bin\agent.exe
+nssm set ModelRelayAgent AppParameters "-config C:\ModelRelay\etc\agent.yaml"
+nssm set ModelRelayAgent AppDirectory C:\ModelRelay\data
+nssm set ModelRelayAgent Start SERVICE_AUTO_START
+nssm start ModelRelayAgent
+```
+
+没有 NSSM/WinSW 时，可以用任务计划程序托管：
+
+```powershell
+$action = New-ScheduledTaskAction `
+  -Execute "C:\ModelRelay\bin\relay.exe" `
+  -Argument "-config C:\ModelRelay\etc\relay.yaml" `
+  -WorkingDirectory "C:\ModelRelay\data"
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal `
+  -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+Register-ScheduledTask -TaskName "ModelRelay-Relay" `
+  -Action $action -Trigger $trigger -Principal $principal
+Start-ScheduledTask -TaskName "ModelRelay-Relay"
+```
+
+Agent 使用相同方式注册 `ModelRelay-Agent` 任务。
+
+### 7.3 macOS launchd
+
+将 Agent 放到 `/usr/local/libexec/modelrelay-agent`，配置放到
+`/Library/Application Support/ModelAgent/agent.yaml`。
+
+创建 `/Library/LaunchDaemons/com.modelrelay.agent.plist`：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.modelrelay.agent</string>
+  <key>ProgramArguments</key><array>
+    <string>/usr/local/libexec/modelrelay-agent</string>
+    <string>-config</string>
+    <string>/Library/Application Support/ModelAgent/agent.yaml</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/var/log/modelrelay-agent.log</string>
+  <key>StandardErrorPath</key><string>/var/log/modelrelay-agent.err</string>
+</dict></plist>
+```
+
+注册和查看：
+
+```bash
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.modelrelay.agent.plist
+sudo launchctl kickstart -k system/com.modelrelay.agent
+sudo launchctl print system/com.modelrelay.agent
+```
+
+### 7.4 主备 Relay
+
+部署两个独立 Relay：
+
+1. 使用不同的 `relay_id`、监听地址和数据库文件。
+2. 两个 Relay 使用同一套 Agent CA。
+3. 两个 Relay 使用各自 SAN 正确的服务端证书。
+4. New API 配置两个 Relay 渠道，或使用上层负载均衡。
+5. Agent 配置两个 WSS 地址：
 
 ```yaml
 relays:
@@ -350,36 +499,63 @@ relays:
 prefer_primary_interval: 60
 ```
 
-进行中的请求不会迁移，故障恢复后 Agent 会重新注册。
+主 Relay 故障后 Agent 会退避重连备 Relay；进行中的请求不会迁移。
 
 ## 8. 日常运维
 
-### 备份
+### 8.1 WebUI 和管理 API
+
+WebUI 可执行立即探测、Drain、踢出节点、修改并发和证书吊销。
+证书吊销会立即断开当前连接，并拒绝旧证书重连。
+
+管理 API：
 
 ```bash
-sudo sqlite3 /var/lib/modelrelay/modelrelay.db \
-  ".backup '/backup/modelrelay-$(date +%F).db'"
+curl -s http://127.0.0.1:9200/api/overview
 ```
 
-同时备份配置和证书公钥。不要把 CA 私钥、Agent 私钥和 Token 放入共享备份。
+### 8.2 备份
 
-### 升级和回滚
+```bash
+sudo mkdir -p /backup/modelrelay
+sudo sqlite3 /var/lib/modelrelay/modelrelay.db \
+  ".backup '/backup/modelrelay/modelrelay-$(date +%F).db'"
+sudo cp -a /etc/modelrelay /backup/modelrelay/
+sudo cp -a /etc/model-agent /backup/modelrelay/
+```
 
-1. 备份数据库。
-2. 下载并校验新的 Release 包。
-3. 停止服务并替换二进制。
-4. 启动服务，检查日志和 WebUI。
-5. 异常时恢复旧二进制并重新启动。
+不要把 CA 私钥、Agent 私钥和内部 Token 放入共享备份。
 
-### 常用排障
+### 8.3 证书轮换
+
+1. 在 Agent 本地生成新的 CSR 和私钥。
+2. 使用 Agent CA 签发新证书。
+3. 替换 Agent 证书并重启 Agent。
+4. 在 WebUI 确认新证书上线。
+5. 确认旧证书不再使用后再吊销。
+
+不要先吊销唯一正在使用的证书。
+
+### 8.4 升级和回滚
+
+1. 备份数据库和配置。
+2. 下载 Release 包并校验 `SHA256SUMS`。
+3. 停止服务，保留旧二进制。
+4. 替换二进制并启动服务。
+5. 检查日志、WebUI 和 `/v1/models`。
+6. 失败时恢复旧二进制并重启。
+
+### 8.5 常用排障
 
 | 现象 | 优先检查 |
 |---|---|
 | `source directory not found` | 使用 `scripts/install.sh`，不要手写旧版本目录 |
-| Relay 启动失败 | `journalctl -u modelrelay-relay`、证书路径和权限 |
+| Relay 启动失败 | Relay 日志、证书路径、权限和 `relay.yaml` |
 | Agent TLS 失败 | 两套 CA、证书 SAN、`node_id` 和系统时间 |
 | 节点 offline | Relay `9443` 防火墙、DNS 和 Agent 日志 |
-| `model_not_found` | 本地模型服务 `/v1/models` 和能力探测 |
-| `capability_not_supported` | 等待探测完成或检查接口能力 |
-| WebUI 401 | 管理员密码和会话是否过期 |
+| `model_not_found` | 本地模型服务 `/v1/models` 和模型名称 |
+| `capability_not_supported` | 等待能力探测完成或重新探测 |
+| 请求 `429` | 节点并发、队列长度和模型服务负载 |
+| 请求 `504` | 本地模型响应时间和超时配置 |
+| WebUI `401` | 管理员密码和会话是否过期 |
 
