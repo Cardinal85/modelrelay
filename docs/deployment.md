@@ -816,14 +816,18 @@ if ($?) {
 } else {
   Start-ScheduledTask -TaskName "ModelRelay-Agent"
 }
-# 任务不存在时，直接前台运行：
-# powershell -NoProfile -ExecutionPolicy Bypass -File C:\ModelRelay\bin\run-agent.ps1
 if (Test-Path C:\ModelRelay\data\ModelRelayAgent.err.log) {
   Get-Content C:\ModelRelay\data\ModelRelayAgent.err.log -Tail 80
 } else {
   Get-Content C:\ModelRelay\data\agent.log -Tail 80 -ErrorAction SilentlyContinue
 }
 ```
+
+`agent.log` 若只有 `starting ... agent.exe`、没有后续 `ModelRelay agent ... started`：
+旧版 `run-agent.ps1` 会把 Go 写到 stderr 的日志当成错误并退出。重装 Agent，或把
+`C:\ModelRelay\bin\run-agent.ps1` 换成安装器新生成的版本后再 `Start-ScheduledTask`。
+前台运行时出现红色 `NativeCommandError` 但内容是 `agent 0.2.0 started`，表示进程已起来，
+那是 PowerShell 把 stderr 当成错误，不是启动失败。
 
 macOS：
 
@@ -1119,6 +1123,8 @@ sudo cp -a /etc/model-agent /backup/modelrelay/
 | WebUI `401` | 管理员密码和会话是否过期 |
 | Windows `系统找不到指定的文件`（0x80070002） | GPU 上误启 `ModelRelay-Relay`；或旧任务名 `ModelRelay-ModelRelayAgent`，见 4.1 |
 | Windows 服务起不来 | 任务计划/NSSM 是否管理员安装；NSSM 看 `*.err.log`，否则看 `agent.log` / `relay.log` |
+| `agent.log` 只有 `starting agent.exe` | 旧 `run-agent.ps1` 被 stderr 日志杀掉；重装或换新启动脚本 |
+| 前台红字 `NativeCommandError` 但已 `started` | Go 日志在 stderr，不是启动失败 |
 | Windows `此应用无法运行` | `certmgr.exe` 需用 llvm-mingw CGO 构建，不要用 CodeBlocks MinGW 8.1 |
 
 ### 8.6 两套 CA 拷反（Agent 连不上 Relay）

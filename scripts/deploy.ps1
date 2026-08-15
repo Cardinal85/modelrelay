@@ -153,17 +153,25 @@ function Ensure-EnvFile([string]$Path, [bool]$Relay) {
 function Write-Runner([string]$Name, [string]$Executable, [string]$Config, [string]$EnvFile) {
     $runner = Join-Path $BinDir "run-$Name.ps1"
     $logPath = Join-Path $DataDir "$Name.log"
+    $exeQ = $Executable.Replace("'", "''")
+    $cfgQ = $Config.Replace("'", "''")
+    $envQ = $EnvFile.Replace("'", "''")
+    $logQ = $logPath.Replace("'", "''")
+    # PowerShell 5.1 treats native stderr as NativeCommandError. Go logs to stderr,
+    # so $ErrorActionPreference=Stop plus & exe *>> log kills the process immediately.
     $text = @(
-        '$ErrorActionPreference = "Stop"'
-        '$log = ''' + $logPath.Replace("'", "''") + ''''
+        '$ErrorActionPreference = "Continue"'
+        '$exe = ''' + $exeQ + ''''
+        '$cfg = ''' + $cfgQ + ''''
+        '$log = ''' + $logQ + ''''
         'New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null'
-        'Get-Content -LiteralPath ''' + $EnvFile.Replace("'", "''") + ''' | ForEach-Object {'
+        'Get-Content -LiteralPath ''' + $envQ + ''' | ForEach-Object {'
         '    if ($_ -match ''^\s*([^#=]+)=(.*)$'') {'
         '        [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2])'
         '    }'
         '}'
-        'Write-Output ("{0:yyyy-MM-dd HH:mm:ss} starting {1}" -f (Get-Date), ''' + $Executable.Replace("'", "''") + ''') | Add-Content -LiteralPath $log'
-        '& ''' + $Executable.Replace("'", "''") + ''' -config ''' + $Config.Replace("'", "''") + ''' *>> $log'
+        'Add-Content -LiteralPath $log -Value ("{0:yyyy-MM-dd HH:mm:ss} starting {1}" -f (Get-Date), $exe)'
+        'cmd.exe /c "`"$exe`" -config `"$cfg`" >> `"$log`" 2>&1"'
         'exit $LASTEXITCODE'
     ) -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($runner, $text)
@@ -192,7 +200,9 @@ function Install-NssmTask([string]$Name, [string]$Runner, [string]$WorkingDirect
         -WorkingDirectory $WorkingDirectory
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
+        -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Principal $principal -Settings $settings -Force | Out-Null
     return "task"
