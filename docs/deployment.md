@@ -3,7 +3,7 @@
 当前版本：**0.2.0**
 
 本文档只有一条主流程：**Relay → 证书 → Agent → New API → 验收**。
-请从第 0 步开始执行。平台差异和手工安装放在文档末尾。
+请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；平台差异、反代和手工安装放在文档末尾。
 
 安装器会下载 GitHub 上的 **latest** 发布包。0.2.0 起发布包包含
 `certmgr` 图形证书管理器（需对应操作系统的包；Fyne 程序在目标系统本地构建）。
@@ -154,16 +154,151 @@ Relay CA  → Relay 服务端证书 → Agent 校验
 
 从 [GitHub Release](https://github.com/Cardinal85/modelrelay/releases/latest)
 下载对应操作系统的发布包，运行其中的 `certmgr`（Windows 为 `certmgr.exe`）。
-覆盖 Windows、Linux 和 macOS：
+覆盖 Windows、Linux 和 macOS。证书管理机无需常在线；只有吊销时才连接 Relay。
 
-1. 创建或打开 Agent CA、Relay CA，查看主题和有效期。
-2. 导入 GPU 主机生成的 CSR，校验 CN / URI SAN 与 `node_id` 后签发 `.crt`。
-3. 填写 CN、DNS SAN、IP SAN 和有效期，签发 Relay 服务端 `.crt` 与 `.key`。
-4. 检查 Subject、Issuer、Serial、SAN、用途和有效期；临期或过期会提示。
-5. 分别导出 Relay 与 Agent 部署文件。Agent 私钥必须在 GPU 主机用 `certctl csr`
-   本地生成，证书管理器不会代生成，也不会导出 `*.key` 到 Agent 目录。
-6. 可选：登录 Relay 管理 API（`/api/login`）查看证书并吊销。使用会话 Cookie，
-   不保存管理员密码。吊销由 Relay 数据库即时生效。
+六个页签的分工：
+
+| 页签 | 作用 |
+|---|---|
+| CA 工作区 | 创建或打开 Agent CA / Relay CA。私钥只留本机。 |
+| 签发 Agent | 导入 GPU 上生成的 CSR，校验后签发客户端 `.crt`，不生成 Agent 私钥。 |
+| 签发 Relay | 按 CN / DNS SAN / IP SAN 签发 Relay 服务端 `.crt` 与 `.key`。 |
+| 证书检查 | 查看 Subject、Issuer、Serial、SAN、用途和有效期。 |
+| 部署导出 | 分别打包给 Relay、给 Agent 的文件；不导出 Agent 私钥和 CA 私钥。 |
+| 在线吊销（可选） | 登录 Relay 管理 API，按序列号吊销。会话 Cookie，不保存密码。 |
+
+推荐顺序：**建两套 CA → 签发 Relay → GPU 送来 CSR 后签发 Agent → 检查 → 分别导出**。
+吊销等证书泄露或节点退役时再用。
+
+#### 2.0.1 图形界面完整流程
+
+三台机器、一次单向交接。私钥不要对向流动：
+
+```text
+证书管理机（certmgr，可离线）          GPU 主机                    Relay 主机
+  ① 建两套 CA
+  ② 签发 Relay 服务端证书  ──────────► 拷 Relay 包 ──────────► relay.crt / relay.key / agent-ca.crt
+  ③ 等 GPU 送来 CSR
+       ◄──── 只送 gpu-001.csr ────  certctl csr（私钥留下）
+  ④ 签发 Agent 证书
+       ──── 只送 gpu-001.crt + relay-ca.crt ──► 与本地 .key 配对
+  ⑤ 检查、导出
+  ⑥ 出事才联网吊销
+```
+
+开始前定好名字，后面所有填写都围着它们：
+
+```text
+RELAY_HOST = relay.example.com
+NODE_ID    = gpu-001
+```
+
+Windows 上 `certmgr` 默认工作区是当前用户目录下的
+`ModelRelay\ca\`（例如 `C:\Users\<用户>\ModelRelay\ca\`）。
+`certmgr` 创建的文件名比 `certctl init-ca` 更清楚：
+
+```text
+...\ca\agent\agent-ca.crt     Agent CA 公钥
+...\ca\agent\agent-ca.key     Agent CA 私钥（只留本机 + 离线备份）
+...\ca\relay\relay-ca.crt     Relay CA 公钥
+...\ca\relay\relay-ca.key     Relay CA 私钥（只留本机 + 离线备份）
+```
+
+**第 1 步：CA 工作区，创建两套根**
+
+打开「CA 工作区」，做两次。
+
+1. 类型选 `Agent CA`，目录 `...\ModelRelay\ca\agent`，主题 CN `ModelRelay Agent CA`，有效期默认 3650 天，点「创建 CA 工作区」。
+2. 类型改成 `Relay CA`（目录会切到 `...\ca\relay`），主题 CN `ModelRelay Relay CA`，再点「创建」。
+3. 立刻把两个 `.key` 拷到 U 盘或离线盘。以后每次打开程序，用「打开 CA 工作区」分别打开这两个目录，确认底部已显示当前 Agent CA / Relay CA。
+
+两套 CA 的目的：Agent CA 签发 GPU 客户端证书，公钥放到 Relay，用来校验节点身份；
+Relay CA 签发 Relay 服务端证书，公钥放到 GPU，用来校验对面是不是真 Relay。
+
+**第 2 步：签发 Relay 服务端证书**
+
+打开 Relay CA 后，切到「签发 Relay」：
+
+| 字段 | 怎么填 |
+|---|---|
+| CN | `relay.example.com`（或实际 IP） |
+| DNS SAN | Agent 用域名连接时必填；多个用逗号 |
+| IP SAN | Agent 用 IP 连接时必填；域名和 IP 都会用就两项都填 |
+| 有效期 | 365 |
+| 输出目录 | 例如 `D:\issued\relay` |
+
+点「签发 Relay 服务端证书」，得到 `relay.example.com.crt` 和 `relay.example.com.key`。
+DNS/IP SAN 必须覆盖 Agent 配置里 `wss://主机:9443/...` 的那个主机名或 IP。
+
+**第 3 步：在 GPU 主机生成 CSR**
+
+这一步不在 `certmgr` 里做。到 GPU 上执行 `certctl csr`（见 2.2 节）。只把
+`gpu-001.csr` 拷到证书管理机；`gpu-001.key` 留在 GPU。`-cn`、`node_id`、证书 CN
+必须相同。
+
+**第 4 步：签发 Agent 证书**
+
+打开 Agent CA 后，切到「签发 Agent」：
+
+1. 选择 GPU 送来的 `gpu-001.csr`，点「校验 CSR」。
+2. 确认 CN、URI SAN、`node_id` 一致；`node_id` 填 `gpu-001`。
+3. 有效期 365，选择输出目录，点「签发 Agent 证书」。
+
+得到 `gpu-001.crt`，没有 `.key`，这是正常的。把 `gpu-001.crt` 和
+`...\ca\relay\relay-ca.crt` 拷回 GPU，**不要覆盖**本机的 `gpu-001.key`。
+
+**第 5 步：证书检查**
+
+在「证书检查」中分别打开 Relay 的 `.crt` 和 Agent 的 `.crt`：
+Relay 证书 SAN 是否包含实际连接地址；Agent 证书 CN 是否为 `gpu-001`，是否由 Agent CA 签发。
+
+**第 6 步：部署导出，分成两包**
+
+切到「部署导出」。不要把整个 `ca` 目录拷走。
+
+导出给 Relay 主机：
+
+| 字段 | 选什么 |
+|---|---|
+| 服务端证书 | 第 2 步的 `relay.example.com.crt` |
+| 服务端私钥 | 第 2 步的 `relay.example.com.key` |
+| Agent CA 公钥 | `...\ca\agent\agent-ca.crt`（不要选 `.key`） |
+| 导出目录 | 例如 `D:\export\relay` |
+
+得到 `relay.crt`、`relay.key`、`agent-ca.crt`。拷到 Relay：
+Linux `/etc/modelrelay/`，Windows `C:\ModelRelay\etc\relay\`。
+
+导出给 Agent 主机：
+
+| 字段 | 选什么 |
+|---|---|
+| Agent 证书 | 第 4 步的 `gpu-001.crt` |
+| Relay CA 公钥 | `...\ca\relay\relay-ca.crt` |
+| node_id | `gpu-001` |
+| 导出目录 | 例如 `D:\export\gpu-001` |
+
+得到 `gpu-001.crt`、`relay-ca.crt`（不含私钥）。拷到 GPU 与本地 `gpu-001.key` 放一起。
+
+| 文件 | 留在哪 |
+|---|---|
+| `agent-ca.key` / `relay-ca.key` | 只留证书管理机 + 离线备份 |
+| `gpu-001.key` | 只留那台 GPU |
+| `gpu-001.csr` | 临时拿到管理机，签完可删 |
+| `gpu-001.crt`、`relay-ca.crt` | GPU |
+| `relay.crt`、`relay.key`、`agent-ca.crt` | Relay |
+
+多一台 GPU 就重复第 3～4 步和第 6 步的 Agent 导出，换一个 `node_id`，不要共用私钥。
+
+**第 7 步：在线吊销（平时不用）**
+
+证书泄露、机器报废、或换证后要作废旧证时：
+
+1. 管理 API 填 `http://127.0.0.1:9200`（远程先做 SSH 隧道，不要把 9200 放到公网）。
+2. 用 Relay 的 `admin` 登录；密码只用于当前会话，不保存。
+3. 刷新列表，复制序列号，确认吊销。Relay 会立即断开并拒绝该证书重连。
+
+正确轮换：GPU 先 `csr` 出新私钥 → 签发新证 → 新证上线 → **再**吊销旧证。
+不要先吊掉正在使用的唯一一张证书。
 
 从源码构建时，Fyne 桌面程序需要在目标操作系统上启用 CGO。
 Windows 请先加载 `scripts/goenv.ps1`（使用 `.tools/llvm-mingw`，不要用
@@ -179,9 +314,11 @@ Linux 或 macOS：
 bash scripts/build-certmgr.sh
 ```
 
-仍可使用下面的 `certctl` 命令完成同样流程。
+仍可使用下面的 `certctl` 命令完成同样流程。`certctl init-ca` 在每个目录都生成名为
+`agent-ca.crt` / `agent-ca.key` 的文件，用目录区分两套 CA；`certmgr` 则为 Relay CA
+使用 `relay-ca.crt` / `relay-ca.key`。
 
-### 2.1 创建 CA（证书管理机）
+### 2.1 创建 CA（证书管理机，命令行）
 
 ```bash
 mkdir -p ./ca/agent ./ca/relay

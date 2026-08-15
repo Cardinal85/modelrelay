@@ -23,7 +23,7 @@
 ## 更新记录
 
 - 2026-08-15：更新 Windows `certmgr.exe`，改为原生文件/文件夹选择框。请重新下载 `modelrelay-windows-amd64.zip`。
-- 2026-08-15：补充部署文档：Windows GPU 生成 CSR、域名与证书 SAN、Relay `9443` TCP 透传 / `9100` HTTPS 反代、各平台路径对照。请使用包内 `docs/deployment.md` 或仓库文档。
+- 2026-08-15：补充 `certmgr` 图形界面完整流程（两套 CA、签发 Relay/Agent、检查、导出、吊销）以及文件交接表。请使用包内 `docs/deployment.md` 第 2.0 节。
 
 ## 发布前检查
 
