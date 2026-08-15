@@ -152,21 +152,28 @@ function Ensure-EnvFile([string]$Path, [bool]$Relay) {
 
 function Write-Runner([string]$Name, [string]$Executable, [string]$Config, [string]$EnvFile) {
     $runner = Join-Path $BinDir "run-$Name.ps1"
-    $text = @"
-`$ErrorActionPreference = "Stop"
-Get-Content -LiteralPath "$( $EnvFile.Replace('"', '""') )" | ForEach-Object {
-    if (`$_ -match '^\s*([^#=]+)=(.*)$') {
-        [Environment]::SetEnvironmentVariable(`$matches[1].Trim(), `$matches[2])
-    }
-}
-& "$( $Executable.Replace('"', '""') )" -config "$( $Config.Replace('"', '""') )"
-exit `$LASTEXITCODE
-"@
-    Set-Content -Path $runner -Value $text -Encoding UTF8
+    $logPath = Join-Path $DataDir "$Name.log"
+    $text = @(
+        '$ErrorActionPreference = "Stop"'
+        '$log = ''' + $logPath.Replace("'", "''") + ''''
+        'New-Item -ItemType Directory -Force -Path (Split-Path $log) | Out-Null'
+        'Get-Content -LiteralPath ''' + $EnvFile.Replace("'", "''") + ''' | ForEach-Object {'
+        '    if ($_ -match ''^\s*([^#=]+)=(.*)$'') {'
+        '        [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2])'
+        '    }'
+        '}'
+        'Write-Output ("{0:yyyy-MM-dd HH:mm:ss} starting {1}" -f (Get-Date), ''' + $Executable.Replace("'", "''") + ''') | Add-Content -LiteralPath $log'
+        '& ''' + $Executable.Replace("'", "''") + ''' -config ''' + $Config.Replace("'", "''") + ''' *>> $log'
+        'exit $LASTEXITCODE'
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($runner, $text)
     return $runner
 }
 
-function Install-NssmTask([string]$Name, [string]$Runner, [string]$WorkingDirectory) {
+function Install-NssmTask([string]$Name, [string]$Runner, [string]$WorkingDirectory, [string]$TaskName) {
+    foreach ($legacy in @($TaskName, "ModelRelay-$Name")) {
+        Unregister-ScheduledTask -TaskName $legacy -Confirm:$false -ErrorAction SilentlyContinue
+    }
     $nssm = Get-Command nssm.exe -ErrorAction SilentlyContinue
     if ($null -ne $nssm) {
         & $nssm.Source stop $Name 2>$null | Out-Null
@@ -180,15 +187,13 @@ function Install-NssmTask([string]$Name, [string]$Runner, [string]$WorkingDirect
         return "nssm"
     }
 
-    $task = "ModelRelay-$Name"
-    Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
     $action = New-ScheduledTaskAction -Execute "$PSHOME\powershell.exe" `
         -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$Runner`"" `
         -WorkingDirectory $WorkingDirectory
     $trigger = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
-    $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
-    Register-ScheduledTask -TaskName $task -Action $action -Trigger $trigger `
+    $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Principal $principal -Settings $settings -Force | Out-Null
     return "task"
 }
@@ -225,17 +230,22 @@ if ($Component -eq "Relay" -or $Component -eq "Both") { Copy-Binary "relay" }
 if ($Component -eq "Agent" -or $Component -eq "Both") { Copy-Binary "agent" }
 if (Test-Path (Join-Path $SourceDir "certctl.exe") -PathType Leaf) { Copy-Binary "certctl" }
 
+$relayMode = $null
+$agentMode = $null
+$relayRunner = $null
+$agentRunner = $null
+
 if ($Component -eq "Relay" -or $Component -eq "Both") {
     Write-RelayConfig
     Ensure-EnvFile $RelayEnv $true
     $relayRunner = Write-Runner "relay" (Join-Path $BinDir "relay.exe") $RelayConfig $RelayEnv
-    $relayMode = Install-NssmTask "ModelRelayRelay" $relayRunner $DataDir
+    $relayMode = Install-NssmTask "ModelRelayRelay" $relayRunner $DataDir "ModelRelay-Relay"
 }
 if ($Component -eq "Agent" -or $Component -eq "Both") {
     Write-AgentConfig
     Ensure-EnvFile $AgentEnv $false
     $agentRunner = Write-Runner "agent" (Join-Path $BinDir "agent.exe") $AgentConfig $AgentEnv
-    $agentMode = Install-NssmTask "ModelRelayAgent" $agentRunner $DataDir
+    $agentMode = Install-NssmTask "ModelRelayAgent" $agentRunner $DataDir "ModelRelay-Agent"
 }
 
 if (-not $NoStart) {
@@ -247,5 +257,25 @@ if (-not $NoStart) {
 
 Write-Host ""
 Write-Host "ModelRelay deployment files installed."
-Write-Host "Service manager: NSSM when available, otherwise Task Scheduler."
-Write-Host "Next steps: copy certificates, review generated YAML, then inspect logs."
+if ($relayMode) {
+    Write-Host "Relay host only. Do not run these commands on a GPU Agent machine."
+    if ($relayMode -eq "nssm") {
+        Write-Host "Start Relay:  Start-Service ModelRelayRelay"
+        Write-Host "Logs:         $(Join-Path $DataDir 'ModelRelayRelay.err.log')"
+    } else {
+        Write-Host "Start Relay:  Start-ScheduledTask -TaskName ModelRelay-Relay"
+        Write-Host "Logs:         $(Join-Path $DataDir 'relay.log')"
+    }
+}
+if ($agentMode) {
+    Write-Host "GPU Agent only. Do not start ModelRelayRelay on this machine."
+    if ($agentMode -eq "nssm") {
+        Write-Host "Start Agent:  Start-Service ModelRelayAgent"
+        Write-Host "Logs:         $(Join-Path $DataDir 'ModelRelayAgent.err.log')"
+    } else {
+        Write-Host "Start Agent:  Start-ScheduledTask -TaskName ModelRelay-Agent"
+        Write-Host "Manual start: powershell -NoProfile -ExecutionPolicy Bypass -File `"$agentRunner`""
+        Write-Host "Logs:         $(Join-Path $DataDir 'agent.log')"
+    }
+    Write-Host "Next: generate CSR with certctl.exe, copy gpu-001.crt and relay-ca.crt, then start Agent."
+}

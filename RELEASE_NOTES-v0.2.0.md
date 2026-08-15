@@ -23,7 +23,7 @@
 ## 更新记录
 
 - 2026-08-15：更新 Windows `certmgr.exe`，改为原生文件/文件夹选择框。请重新下载 `modelrelay-windows-amd64.zip`。
-- 2026-08-15：Windows 安装器在未提权时弹出 UAC；管理员提示改为英文以免乱码。请用管理员 PowerShell 并加 `-NoProfile`。
+- 2026-08-15：修复 Windows 无 NSSM 时任务名错误（`ModelRelay-Agent` / `ModelRelay-Relay`），安装结束会打印正确的启动命令和日志路径。GPU 不要执行 Relay 启动命令。
 
 ## 发布前检查
 

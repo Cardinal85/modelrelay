@@ -564,6 +564,8 @@ store:
 
 ### 3.3 启动并检查
 
+仅在 **Relay 主机**上执行。GPU / Agent 机器不要启动 `ModelRelayRelay`。
+
 Linux：
 
 ```bash
@@ -572,12 +574,20 @@ sudo systemctl status modelrelay-relay --no-pager
 sudo journalctl -u modelrelay-relay -n 100 --no-pager
 ```
 
-Windows：
+Windows Relay 主机：
 
 ```powershell
-Restart-Service ModelRelayRelay -ErrorAction SilentlyContinue
-if (-not $?) { Start-ScheduledTask -TaskName "ModelRelay-Relay" }
-Get-Content C:\ModelRelay\data\ModelRelayRelay.err.log -Tail 80
+Get-Service ModelRelayRelay -ErrorAction SilentlyContinue
+if ($?) {
+  Restart-Service ModelRelayRelay
+} else {
+  Start-ScheduledTask -TaskName "ModelRelay-Relay"
+}
+if (Test-Path C:\ModelRelay\data\ModelRelayRelay.err.log) {
+  Get-Content C:\ModelRelay\data\ModelRelayRelay.err.log -Tail 80
+} else {
+  Get-Content C:\ModelRelay\data\relay.log -Tail 80 -ErrorAction SilentlyContinue
+}
 ```
 
 macOS：
@@ -767,12 +777,22 @@ sudo systemctl status modelrelay-agent --no-pager
 sudo journalctl -u modelrelay-agent -n 100 --no-pager
 ```
 
-Windows：
+Windows GPU（不要执行 `ModelRelayRelay`）：
 
 ```powershell
-Restart-Service ModelRelayAgent -ErrorAction SilentlyContinue
-if (-not $?) { Start-ScheduledTask -TaskName "ModelRelay-Agent" }
-Get-Content C:\ModelRelay\data\ModelRelayAgent.err.log -Tail 80
+Get-Service ModelRelayAgent -ErrorAction SilentlyContinue
+if ($?) {
+  Restart-Service ModelRelayAgent
+} else {
+  Start-ScheduledTask -TaskName "ModelRelay-Agent"
+}
+# 任务不存在时，直接前台运行：
+# powershell -NoProfile -ExecutionPolicy Bypass -File C:\ModelRelay\bin\run-agent.ps1
+if (Test-Path C:\ModelRelay\data\ModelRelayAgent.err.log) {
+  Get-Content C:\ModelRelay\data\ModelRelayAgent.err.log -Tail 80
+} else {
+  Get-Content C:\ModelRelay\data\agent.log -Tail 80 -ErrorAction SilentlyContinue
+}
 ```
 
 macOS：
