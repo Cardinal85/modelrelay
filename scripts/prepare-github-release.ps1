@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = "0.2.0",
+    [string]$Version = "0.2.1",
     [string]$DistDir = "",
     [string]$OutputDir = "",
     [switch]$Clean
@@ -51,9 +51,20 @@ function Copy-CommonFiles([string]$Destination) {
     foreach ($name in @("deploy.sh", "deploy.ps1", "install.sh", "install.ps1")) {
         $source = Join-Path $RepoRoot "scripts\$name"
         if (Test-Path $source) {
-            Copy-Item -Force $source $scripts
+            $dest = Join-Path $scripts $name
+            if ($name -like "*.sh") {
+                Copy-UnixText $source $dest
+            } else {
+                Copy-Item -Force $source $dest
+            }
         }
     }
+}
+
+function Copy-UnixText([string]$Source, [string]$Destination) {
+    $text = [System.IO.File]::ReadAllText($Source) -replace "`r`n", "`n" -replace "`r", "`n"
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($Destination, $text, $utf8)
 }
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
