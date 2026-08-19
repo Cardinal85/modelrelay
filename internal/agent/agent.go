@@ -126,6 +126,14 @@ func (a *Agent) setModels(models []protocol.ModelInfo) {
 // handleRequest 处理来自 Relay 的转发请求。
 func (a *Agent) handleRequest(c *Connector, req protocol.Request) {
 	a.stats.RequestsTotal.Add(1)
+	if !protocol.IsAllowedPath(req.Method, req.Path) {
+		_ = c.writeControl(protocol.Error{
+			Type: protocol.MsgError, RequestID: req.RequestID,
+			Code: protocol.ErrInvalidRequest, Message: "method or path not allowed",
+		})
+		a.stats.RequestsFailed.Add(1)
+		return
+	}
 	if req.BodyLen < 0 || req.BodyLen > a.cfg.MaxBodyBytes {
 		_ = c.writeControl(protocol.Error{
 			Type: protocol.MsgError, RequestID: req.RequestID,

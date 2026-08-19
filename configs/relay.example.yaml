@@ -22,7 +22,7 @@ internal_auth:
   token: "${RELAY_INTERNAL_TOKEN}"
 
 limits:
-  max_body_bytes: 67108864        # 64 MiB
+  max_body_bytes: 209715200       # 200 MiB
   max_concurrency: 64
   queue_length: 256
   queue_timeout_sec: 30
@@ -34,9 +34,17 @@ limits:
 admin:
   listen: "127.0.0.1:9200"
   session_ttl_min: 30
-  # 初始管理员（首次启动写入 SQLite；生产环境请用 certctl/初始化命令生成哈希后移除）
+  # 仅当 RemoteAddr 在名单内时才信任 CF-Connecting-IP / X-Forwarded-For / X-Forwarded-Proto。
+  trusted_proxies: ["127.0.0.1", "::1"]
+  # HTTPS 反代时可设 true；或由可信反代传 X-Forwarded-Proto: https。
+  secure_cookie: false
+  # 可选：Cloudflare Turnstile（site_key 与 secret_key 必须同时配置）
+  # turnstile:
+  #   site_key: ""
+  #   secret_key: ""
+  # 初始管理员（首次启动写入 SQLite；之后改 env 不会覆盖库内账号）
   users:
-    - username: admin
+    - username: "${RELAY_ADMIN_USERNAME}"
       password: "${RELAY_ADMIN_PASSWORD}"
       role: admin
 

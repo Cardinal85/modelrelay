@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"sort"
 	"sync"
@@ -109,10 +110,11 @@ func (c *Connector) connectOnce(rawURL string, relayIdx, relayCount int) error {
 		TLSClientConfig:  tlsCfg,
 		HandshakeTimeout: 15 * time.Second,
 	}
-	conn, _, err := dialer.Dial(rawURL, nil)
+	conn, _, err := dialer.Dial(rawURL, agentOriginHeader())
 	if err != nil {
 		return err
 	}
+	conn.SetReadLimit(protocol.MaxWSMessage)
 	c.conn = conn
 	c.agent.stats.Reconnects.Add(1)
 
@@ -210,7 +212,7 @@ func (c *Connector) watchPrimary(currentIdx int, conn *websocket.Conn, stop chan
 					TLSClientConfig:  tlsCfg,
 					HandshakeTimeout: 5 * time.Second,
 				}
-				c2, _, err := d.Dial(r.URL, nil)
+				c2, _, err := d.Dial(r.URL, agentOriginHeader())
 				if err == nil {
 					_ = c2.Close()
 					log.Printf("agent: primary %s reachable, switching back", r.URL)
@@ -232,6 +234,10 @@ func (c *Connector) readLoop(conn *websocket.Conn) {
 		}
 		switch mt {
 		case websocket.TextMessage:
+			if int64(len(data)) > protocol.MaxControlMessage {
+				log.Printf("agent: control message too large (%d)", len(data))
+				return
+			}
 			typ, raw, err := protocol.ParseControl(data)
 			if err != nil {
 				log.Printf("agent: bad control: %v", err)
@@ -370,6 +376,12 @@ func (c *Connector) Stop() {
 		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, "bye"), time.Now().Add(2*time.Second))
 		_ = c.conn.Close()
 	}
+}
+
+func agentOriginHeader() http.Header {
+	h := make(http.Header)
+	h.Set("Origin", protocol.AgentOrigin)
+	return h
 }
 
 func sortedRelays(rs []config.RelayAddr) []config.RelayAddr {

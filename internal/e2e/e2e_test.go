@@ -91,6 +91,7 @@ func setup(t *testing.T) *testEnv {
 		RequestTimeoutMs:  120000,
 		HeartbeatTimeoutS: 8,
 		InternalAuthToken: token,
+		InternalAuthEnabled: true,
 	})
 	wss, err := relay.NewWSSServer(srv, filepath.Join(dir, "relay.crt"), filepath.Join(dir, "relay.key"), filepath.Join(dir, "agent-ca.crt"), "127.0.0.1:0")
 	if err != nil {

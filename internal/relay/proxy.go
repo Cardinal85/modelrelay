@@ -121,7 +121,7 @@ func (s *Server) handleProxy(w http.ResponseWriter, r *http.Request, method, pat
 
 	// 3. 建立 pending 并发送请求。
 	id16 := protocol.RequestIDBytes(reqID)
-	pend := newPendingRequest(id16, reqID)
+	pend := newPendingRequest(id16, reqID, node.ID)
 	s.pending.add(pend)
 	defer s.pending.remove(id16)
 

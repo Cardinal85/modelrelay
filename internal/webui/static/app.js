@@ -5,6 +5,8 @@ const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const state = { me: null, page: "overview", nodes: [], timer: null };
+let turnstileSiteKey = "";
+let turnstileWidgetId = null;
 
 async function api(path, opts = {}) {
   const res = await fetch("/api" + path, {
@@ -53,18 +55,63 @@ function showMain() {
   $("#main-view").classList.remove("hidden");
 }
 
+function loadTurnstileScript() {
+  return new Promise((resolve, reject) => {
+    if (window.turnstile) {
+      resolve();
+      return;
+    }
+    const s = document.createElement("script");
+    s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    s.async = true;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error("failed to load Turnstile"));
+    document.head.appendChild(s);
+  });
+}
+
+async function setupTurnstile() {
+  try {
+    const res = await fetch("/api/login-config", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const cfg = await res.json();
+    turnstileSiteKey = cfg.turnstile_site_key || "";
+    if (!turnstileSiteKey) return;
+    $("#turnstile-wrap").classList.remove("hidden");
+    await loadTurnstileScript();
+    if (window.turnstile && turnstileWidgetId == null) {
+      turnstileWidgetId = window.turnstile.render("#turnstile-wrap", { sitekey: turnstileSiteKey });
+    }
+  } catch (e) { /* Turnstile 为可选 */ }
+}
+
+function turnstileToken() {
+  if (!turnstileSiteKey || !window.turnstile) return "";
+  try { return window.turnstile.getResponse(turnstileWidgetId) || ""; } catch (e) { return ""; }
+}
+
+function resetTurnstile() {
+  if (!turnstileSiteKey || !window.turnstile || turnstileWidgetId == null) return;
+  try { window.turnstile.reset(turnstileWidgetId); } catch (e) { /* ignore */ }
+}
+
 async function doLogin(e) {
   e.preventDefault();
   $("#login-error").classList.add("hidden");
   try {
     const r = await api("/login", {
       method: "POST",
-      body: JSON.stringify({ username: $("#login-user").value, password: $("#login-pass").value }),
+      body: JSON.stringify({
+        username: $("#login-user").value,
+        password: $("#login-pass").value,
+        turnstile_token: turnstileToken(),
+      }),
     });
     state.me = r.user;
     showMain();
     route();
   } catch (err) {
+    resetTurnstile();
     $("#login-error").textContent = err.message;
     $("#login-error").classList.remove("hidden");
   }
@@ -364,6 +411,9 @@ async function boot() {
     showMain();
     route();
     startAuto();
-  } catch (e) { showLogin(); }
+  } catch (e) {
+    showLogin();
+    setupTurnstile();
+  }
 }
 boot();

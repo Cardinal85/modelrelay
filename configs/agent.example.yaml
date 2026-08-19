@@ -2,6 +2,7 @@
 # 复制为 agent.yaml 后按需修改。
 
 node_id: gpu-001
+max_body_bytes: 209715200
 
 # Relay 地址列表，priority 越小越优先（主备组网）。
 relays:

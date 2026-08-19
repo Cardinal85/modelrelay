@@ -62,17 +62,7 @@ func CapabilityForPath(method, path string) string {
 
 // IsAllowedPath 判断路径与方法是否在转发白名单内。
 func IsAllowedPath(method, path string) bool {
-	switch path {
-	case "/v1/chat/completions", "/v1/completions", "/v1/embeddings", "/v1/responses",
-		"/v1/audio/transcriptions", "/v1/audio/translations", "/v1/audio/speech",
-		"/v1/images/generations", "/v1/images/edits", "/v1/images/variations",
-		"/v1/moderations", "/v1/rerank", "/v1/reranking":
-		return method == "POST" || method == "GET"
-	case "/v1/models", "/v1/models/":
-		return method == "GET"
-	default:
-		return false
-	}
+	return protocol.IsAllowedPath(method, path)
 }
 
 // Select 选择一个可用节点。

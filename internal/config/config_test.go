@@ -20,6 +20,7 @@ func TestRelayValidate(t *testing.T) {
 	r.TLSCert = "relay.crt"
 	r.TLSKey = "relay.key"
 	r.AgentCA = "agent-ca.crt"
+	r.InternalAuth.Token = "test-token"
 	if err := r.Validate(); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
@@ -30,6 +31,13 @@ func TestRelayValidate(t *testing.T) {
 		t.Fatal("bad http_listen must fail")
 	}
 	r.HTTPListen = "127.0.0.1:9100"
+
+	r.InternalAuth.Enabled = true
+	r.InternalAuth.Token = ""
+	if err := r.Validate(); err == nil {
+		t.Fatal("enabled internal_auth with empty token must fail")
+	}
+	r.InternalAuth.Token = "test-token"
 
 	// 空 relay_id。
 	r.RelayID = ""

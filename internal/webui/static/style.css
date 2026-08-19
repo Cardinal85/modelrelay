@@ -102,6 +102,7 @@ tr:hover td { background: #fafbfc; }
 
 /* 能力 chips */
 .chip { display: inline-block; margin: 2px 4px 2px 0; padding: 2px 8px; border-radius: 4px; font-size: 12px; background: var(--bg-soft); border: 1px solid var(--border); }
+.turnstile-wrap { margin: 12px 0; min-height: 65px; }
 
 /* 抽屉 */
 .drawer {

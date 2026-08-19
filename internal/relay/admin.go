@@ -19,6 +19,17 @@ import (
 )
 
 const sessionCookieName = "modelrelay_session"
+const loginBodyLimit = 16 << 10
+
+// AdminOptions 是管理服务的监听与安全选项。
+type AdminOptions struct {
+	Listen          string
+	SessionTTL      time.Duration
+	TrustedProxies  []string
+	SecureCookie    bool
+	TurnstileSite   string
+	TurnstileSecret string
+}
 
 // session 是管理会话。
 type session struct {
@@ -43,26 +54,48 @@ type AdminServer struct {
 	sessions   map[string]*session
 	loginFails map[string]loginFail
 
+	trustedProxies  []net.IP
+	secureCookie    bool
+	turnstileSite   string
+	turnstileSecret string
+
 	httpSrv  *http.Server
 	listener net.Listener
 }
 
 // NewAdminServer 创建管理服务。
 func NewAdminServer(srv *Server, st *store.Store, listen string, sessionTTL time.Duration) (*AdminServer, error) {
-	ln, err := net.Listen("tcp", listen)
+	return NewAdminServerWithOptions(srv, st, AdminOptions{Listen: listen, SessionTTL: sessionTTL})
+}
+
+// NewAdminServerWithOptions 创建带反代/Turnstile 选项的管理服务。
+func NewAdminServerWithOptions(srv *Server, st *store.Store, opts AdminOptions) (*AdminServer, error) {
+	if opts.SessionTTL <= 0 {
+		opts.SessionTTL = 30 * time.Minute
+	}
+	ln, err := net.Listen("tcp", opts.Listen)
 	if err != nil {
-		return nil, fmt.Errorf("relay: admin listen %s: %w", listen, err)
+		return nil, fmt.Errorf("relay: admin listen %s: %w", opts.Listen, err)
 	}
 	a := &AdminServer{
-		srv:        srv,
-		st:         st,
-		listen:     listen,
-		sessionTTL: sessionTTL,
-		sessions:   make(map[string]*session),
-		loginFails: make(map[string]loginFail),
-		listener:   ln,
+		srv:             srv,
+		st:              st,
+		listen:          opts.Listen,
+		sessionTTL:      opts.SessionTTL,
+		sessions:        make(map[string]*session),
+		loginFails:      make(map[string]loginFail),
+		secureCookie:    opts.SecureCookie,
+		turnstileSite:   opts.TurnstileSite,
+		turnstileSecret: opts.TurnstileSecret,
+		listener:        ln,
+	}
+	for _, p := range opts.TrustedProxies {
+		if ip := net.ParseIP(p); ip != nil {
+			a.trustedProxies = append(a.trustedProxies, ip)
+		}
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/login-config", a.handleLoginConfig)
 	mux.HandleFunc("/api/login", a.handleLogin)
 	mux.HandleFunc("/api/", a.handleAPI)
 	mux.Handle("/", a.staticHandler())
@@ -124,12 +157,26 @@ func (a *AdminServer) Close() error { return a.httpSrv.Close() }
 
 // --- 认证 ---
 
+func (a *AdminServer) handleLoginConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"turnstile_site_key": a.turnstileSite,
+	})
+}
+
 func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	ip := clientIP(r)
+	if a.rejectCrossOrigin(w, r) {
+		return
+	}
+	ip := a.clientIP(r)
 	a.mu.Lock()
 	f := a.loginFails[ip]
 	if f.count >= 5 && time.Now().Before(f.until) {
@@ -139,13 +186,22 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 
+	r.Body = http.MaxBytesReader(w, r.Body, loginBodyLimit)
 	var body struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Username       string `json:"username"`
+		Password       string `json:"password"`
+		TurnstileToken string `json:"turnstile_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeAdminError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	if a.turnstileSecret != "" {
+		if !verifyTurnstile(a.turnstileSecret, body.TurnstileToken, ip) {
+			a.recordLoginFail(ip)
+			writeAdminError(w, http.StatusUnauthorized, "turnstile verification failed")
+			return
+		}
 	}
 	user, err := a.st.GetAdminUser(body.Username)
 	if err != nil || !store.CheckPassword(user.PasswordHash, body.Password) {
@@ -167,6 +223,7 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   a.useSecureCookie(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(a.sessionTTL.Seconds()),
 	})
@@ -221,14 +278,10 @@ func (a *AdminServer) handleAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CSRF：非安全方法校验 Origin。
+	// CSRF：非安全方法必须带同源 Origin。
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
-		if origin := r.Header.Get("Origin"); origin != "" {
-			want := "http://" + r.Host
-			if origin != want && origin != "https://"+r.Host {
-				writeAdminError(w, http.StatusForbidden, "cross-origin request rejected")
-				return
-			}
+		if a.rejectCrossOrigin(w, r) {
+			return
 		}
 	}
 
@@ -282,7 +335,7 @@ func (a *AdminServer) handleLogout(w http.ResponseWriter, r *http.Request) {
 		delete(a.sessions, c.Value)
 		a.mu.Unlock()
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, Secure: a.useSecureCookie(r), HttpOnly: true})
 	_ = json.NewEncoder(w).Encode(map[string]string{"ok": "logged out"})
 }
 
@@ -534,6 +587,67 @@ func writeAdminError(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func (a *AdminServer) rejectCrossOrigin(w http.ResponseWriter, r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		writeAdminError(w, http.StatusForbidden, "cross-origin request rejected")
+		return true
+	}
+	wantHTTP := "http://" + r.Host
+	wantHTTPS := "https://" + r.Host
+	if origin != wantHTTP && origin != wantHTTPS {
+		writeAdminError(w, http.StatusForbidden, "cross-origin request rejected")
+		return true
+	}
+	return false
+}
+
+func (a *AdminServer) useSecureCookie(r *http.Request) bool {
+	if a.secureCookie {
+		return true
+	}
+	if a.fromTrustedProxy(r) && strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	return r.TLS != nil
+}
+
+func (a *AdminServer) fromTrustedProxy(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, p := range a.trustedProxies {
+		if p.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *AdminServer) clientIP(r *http.Request) string {
+	direct := clientIP(r)
+	if !a.fromTrustedProxy(r) {
+		return direct
+	}
+	if cf := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); cf != "" {
+		if ip := net.ParseIP(cf); ip != nil {
+			return ip.String()
+		}
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		first := strings.TrimSpace(strings.Split(xff, ",")[0])
+		if ip := net.ParseIP(first); ip != nil {
+			return ip.String()
+		}
+	}
+	return direct
 }
 
 func clientIP(r *http.Request) string {

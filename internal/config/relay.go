@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -64,6 +65,15 @@ type Admin struct {
 	Users          []AdminUser   `yaml:"users"`
 	SessionTimeout time.Duration `yaml:"session_timeout"`
 	SessionTTLMin  int           `yaml:"session_ttl_min"`
+	TrustedProxies []string      `yaml:"trusted_proxies"`
+	SecureCookie   bool          `yaml:"secure_cookie"`
+	Turnstile      Turnstile     `yaml:"turnstile"`
+}
+
+// Turnstile 是 Cloudflare Turnstile 人机验证（可选）。
+type Turnstile struct {
+	SiteKey   string `yaml:"site_key"`
+	SecretKey string `yaml:"secret_key"`
 }
 
 // AdminUser 是管理员账号。
@@ -80,7 +90,7 @@ func DefaultRelay() *Relay {
 	r.HTTPListen = "127.0.0.1:9100"
 	r.WSSListen = "0.0.0.0:9443"
 	r.Limits = Limits{
-		MaxBodyBytes:        64 << 20,
+		MaxBodyBytes:        200 << 20,
 		MaxConcurrency:      64,
 		QueueLength:         256,
 		QueueTimeoutSec:     30,
@@ -93,6 +103,7 @@ func DefaultRelay() *Relay {
 	r.Admin.Listen = "127.0.0.1:9200"
 	r.Admin.SessionTimeout = 30 * time.Minute
 	r.Admin.SessionTTLMin = 30
+	r.Admin.TrustedProxies = []string{"127.0.0.1", "::1"}
 	r.Store.DBPath = "modelrelay.db"
 	r.Retention.RetentionDays = 30
 	r.LogLevel = "info"
@@ -115,6 +126,14 @@ func (r *Relay) Validate() error {
 	}
 	if r.AgentCA == "" {
 		return fmt.Errorf("agent_ca is required to verify agent certificates")
+	}
+	if r.InternalAuth.Enabled && strings.TrimSpace(r.InternalAuth.Token) == "" {
+		return fmt.Errorf("internal_auth.enabled requires a non-empty token")
+	}
+	site := strings.TrimSpace(r.Admin.Turnstile.SiteKey)
+	secret := strings.TrimSpace(r.Admin.Turnstile.SecretKey)
+	if (site == "") != (secret == "") {
+		return fmt.Errorf("admin.turnstile.site_key and secret_key must be set together")
 	}
 	if r.Limits.MaxConcurrency <= 0 || r.Limits.QueueLength < 0 {
 		return fmt.Errorf("limits invalid: max_concurrency>0, queue_length>=0")

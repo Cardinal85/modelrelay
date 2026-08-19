@@ -14,6 +14,7 @@ import (
 type pendingRequest struct {
 	reqID     [16]byte
 	requestID string
+	nodeID    string
 	// frames 是 Agent 发来的数据帧（有界缓冲）。
 	frames chan *protocol.Frame
 	// headers 是 Agent 发来的响应头（容量 1）。
@@ -25,10 +26,11 @@ type pendingRequest struct {
 	closeOnce sync.Once
 }
 
-func newPendingRequest(reqID [16]byte, requestID string) *pendingRequest {
+func newPendingRequest(reqID [16]byte, requestID, nodeID string) *pendingRequest {
 	return &pendingRequest{
 		reqID:     reqID,
 		requestID: requestID,
+		nodeID:    nodeID,
 		frames:    make(chan *protocol.Frame, 16),
 		headers:   make(chan protocol.ResponseHeaders, 1),
 		done:      make(chan protocol.Done, 1),
@@ -119,7 +121,8 @@ type RelayConfig struct {
 	RequestTimeoutMs  int64
 	HeartbeatTimeoutS int
 
-	InternalAuthToken string
+	InternalAuthToken    string
+	InternalAuthEnabled  bool
 }
 
 // Stats 是 Relay 运行指标（原子计数）。

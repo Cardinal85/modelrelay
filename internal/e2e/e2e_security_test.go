@@ -37,6 +37,12 @@ func loadRootPool(t *testing.T, caFile string) *x509.CertPool {
 	return pool
 }
 
+func agentOriginHeader() http.Header {
+	h := make(http.Header)
+	h.Set("Origin", protocol.AgentOrigin)
+	return h
+}
+
 func TestE2EMTLSRejections(t *testing.T) {
 	env := setup(t)
 	url := env.wssURL()
@@ -44,10 +50,10 @@ func TestE2EMTLSRejections(t *testing.T) {
 
 	t.Run("no_client_cert_rejected", func(t *testing.T) {
 		dialer := websocket.Dialer{
-			TLSClientConfig: &tls.Config{RootCAs: relayCA, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:  &tls.Config{RootCAs: relayCA, MinVersion: tls.VersionTLS12},
 			HandshakeTimeout: 5 * time.Second,
 		}
-		conn, _, err := dialer.Dial(url, nil)
+		conn, _, err := dialer.Dial(url, agentOriginHeader())
 		if err == nil {
 			conn.Close()
 			t.Fatal("TLS handshake must fail without client certificate")
@@ -73,10 +79,10 @@ func TestE2EMTLSRejections(t *testing.T) {
 			t.Fatalf("load rogue cert: %v", err)
 		}
 		dialer := websocket.Dialer{
-			TLSClientConfig: &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:  &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 			HandshakeTimeout: 5 * time.Second,
 		}
-		conn, _, err := dialer.Dial(url, nil)
+		conn, _, err := dialer.Dial(url, agentOriginHeader())
 		if err == nil {
 			conn.Close()
 			t.Fatal("cert from untrusted CA must be rejected at TLS layer")
@@ -92,10 +98,10 @@ func TestE2EMTLSRejections(t *testing.T) {
 			t.Fatalf("load node cert: %v", err)
 		}
 		dialer := websocket.Dialer{
-			TLSClientConfig: &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:  &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 			HandshakeTimeout: 5 * time.Second,
 		}
-		conn, _, err := dialer.Dial(url, nil)
+		conn, _, err := dialer.Dial(url, agentOriginHeader())
 		if err != nil {
 			t.Fatalf("dial: %v", err)
 		}
@@ -142,10 +148,10 @@ func TestE2EMTLSRejections(t *testing.T) {
 			t.Fatalf("load: %v", err)
 		}
 		dialer := websocket.Dialer{
-			TLSClientConfig: &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:  &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 			HandshakeTimeout: 5 * time.Second,
 		}
-		conn, _, err := dialer.Dial(url, nil)
+		conn, _, err := dialer.Dial(url, agentOriginHeader())
 		if err != nil {
 			t.Fatalf("dial: %v", err)
 		}
@@ -194,6 +200,30 @@ func TestE2EMTLSRejections(t *testing.T) {
 		}
 	})
 
+	t.Run("wrong_origin_rejected", func(t *testing.T) {
+		cert, err := tls.LoadX509KeyPair(
+			filepath.Join(env.dir, "node-1.crt"),
+			filepath.Join(env.dir, "node-1.key"),
+		)
+		if err != nil {
+			t.Fatalf("load node cert: %v", err)
+		}
+		dialer := websocket.Dialer{
+			TLSClientConfig:  &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+			HandshakeTimeout: 5 * time.Second,
+		}
+		hdr := make(http.Header)
+		hdr.Set("Origin", "https://evil.example.com")
+		conn, resp, err := dialer.Dial(url, hdr)
+		if err == nil {
+			conn.Close()
+			t.Fatal("browser origin must be rejected")
+		}
+		if resp != nil && resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("origin reject status=%d", resp.StatusCode)
+		}
+	})
+
 	t.Run("duplicate_node_rejected", func(t *testing.T) {
 		// 用 node-1 证书再连一次（node-1 已被真实 Agent 占用）→ 必须拒绝。
 		cert, err := tls.LoadX509KeyPair(
@@ -204,10 +234,10 @@ func TestE2EMTLSRejections(t *testing.T) {
 			t.Fatalf("load node cert: %v", err)
 		}
 		dialer := websocket.Dialer{
-			TLSClientConfig: &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
+			TLSClientConfig:  &tls.Config{RootCAs: relayCA, Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12},
 			HandshakeTimeout: 5 * time.Second,
 		}
-		conn, _, err := dialer.Dial(url, nil)
+		conn, _, err := dialer.Dial(url, agentOriginHeader())
 		if err != nil {
 			t.Fatalf("dial: %v", err)
 		}
@@ -266,5 +296,16 @@ func TestAdminCSRFRejected(t *testing.T) {
 	resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("same-origin status=%d", resp2.StatusCode)
+	}
+
+	req3, _ := http.NewRequest(http.MethodPost, env.adminURL+"/api/nodes/node-1/kick", nil)
+	req3.Header.Set("Content-Type", "application/json")
+	resp3, err := admin.client.Do(req3)
+	if err != nil {
+		t.Fatalf("empty origin req: %v", err)
+	}
+	resp3.Body.Close()
+	if resp3.StatusCode != http.StatusForbidden {
+		t.Fatalf("empty origin status=%d want 403", resp3.StatusCode)
 	}
 }

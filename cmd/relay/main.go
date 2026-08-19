@@ -48,18 +48,19 @@ func main() {
 
 func run(ctx context.Context, cfg *config.Relay) error {
 	srv := relay.NewServer(&relay.RelayConfig{
-		RelayID:           cfg.RelayID,
-		HTTPListen:        cfg.HTTPListen,
-		WSSListen:         cfg.WSSListen,
-		MaxBodyBytes:      cfg.Limits.MaxBodyBytes,
-		MaxConcurrency:    cfg.Limits.MaxConcurrency,
-		QueueLength:       cfg.Limits.QueueLength,
-		QueueTimeoutMs:    int64(cfg.Limits.QueueTimeoutSec) * 1000,
-		TTFTTimeoutMs:     int64(cfg.Limits.TTFTTimeoutSec) * 1000,
-		IdleTimeoutMs:     int64(cfg.Limits.IdleTimeoutSec) * 1000,
-		RequestTimeoutMs:  int64(cfg.Limits.RequestTimeoutSec) * 1000,
-		HeartbeatTimeoutS: cfg.Limits.HeartbeatTimeoutSec,
-		InternalAuthToken: cfg.InternalAuth.Token,
+		RelayID:             cfg.RelayID,
+		HTTPListen:          cfg.HTTPListen,
+		WSSListen:           cfg.WSSListen,
+		MaxBodyBytes:        cfg.Limits.MaxBodyBytes,
+		MaxConcurrency:      cfg.Limits.MaxConcurrency,
+		QueueLength:         cfg.Limits.QueueLength,
+		QueueTimeoutMs:      int64(cfg.Limits.QueueTimeoutSec) * 1000,
+		TTFTTimeoutMs:       int64(cfg.Limits.TTFTTimeoutSec) * 1000,
+		IdleTimeoutMs:       int64(cfg.Limits.IdleTimeoutSec) * 1000,
+		RequestTimeoutMs:    int64(cfg.Limits.RequestTimeoutSec) * 1000,
+		HeartbeatTimeoutS:   cfg.Limits.HeartbeatTimeoutSec,
+		InternalAuthToken:   cfg.InternalAuth.Token,
+		InternalAuthEnabled: cfg.InternalAuth.Enabled,
 	})
 	srv.SetRetention(cfg.Retention.KeepPromptResponse, cfg.Retention.RetentionDays)
 
@@ -104,7 +105,18 @@ func run(ctx context.Context, cfg *config.Relay) error {
 
 	var admin *relay.AdminServer
 	if cfg.Admin.Listen != "" {
-		admin, err = relay.NewAdminServer(srv, st, cfg.Admin.Listen, cfg.Admin.SessionTimeout)
+		ttl := cfg.Admin.SessionTimeout
+		if ttl <= 0 {
+			ttl = time.Duration(cfg.Admin.SessionTTLMin) * time.Minute
+		}
+		admin, err = relay.NewAdminServerWithOptions(srv, st, relay.AdminOptions{
+			Listen:          cfg.Admin.Listen,
+			SessionTTL:      ttl,
+			TrustedProxies:  cfg.Admin.TrustedProxies,
+			SecureCookie:    cfg.Admin.SecureCookie,
+			TurnstileSite:   cfg.Admin.Turnstile.SiteKey,
+			TurnstileSecret: cfg.Admin.Turnstile.SecretKey,
+		})
 		if err != nil {
 			return err
 		}

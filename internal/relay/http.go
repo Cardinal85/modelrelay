@@ -57,7 +57,11 @@ func (u *UpstreamServer) Close(ctx context.Context) error { return u.httpSrv.Shu
 // handle 是 HTTP 上游入口。
 func (u *UpstreamServer) handle(w http.ResponseWriter, r *http.Request) {
 	// 1. 内部认证。
-	if u.srv.cfg.InternalAuthToken != "" {
+	if u.srv.cfg.InternalAuthEnabled {
+		if u.srv.cfg.InternalAuthToken == "" {
+			writeRelayError(w, protocol.ErrUnauthorized, "internal auth is not configured")
+			return
+		}
 		got := r.Header.Get("Authorization")
 		got = strings.TrimPrefix(got, "Bearer ")
 		if subtle.ConstantTimeCompare([]byte(got), []byte(u.srv.cfg.InternalAuthToken)) != 1 {

@@ -1,6 +1,6 @@
 # ModelRelay 部署指南
 
-当前版本：**0.2.0**
+当前版本：**0.2.1**
 
 本文档只有一条主流程：**Relay → 证书 → Agent → New API → 验收**。
 请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；两套 CA 拷反见第 8.6 节；卸载见第 11 节；平台差异、反代和手工安装放在文档末尾。
@@ -30,10 +30,13 @@ MODEL_URL=http://127.0.0.1:8000/v1
 
 | 端口 | 用途 | 建议 |
 |---|---|---|
-| `9443/tcp` | Agent → Relay WSS/mTLS | 只允许 GPU 网段；可 TCP 透传，禁止 TLS 终止 |
-| `9100/tcp` | New API → Relay API | 只允许 New API 网段；可 HTTPS 反代 |
-| `9200/tcp` | 管理 WebUI | 只监听本机或管理网；优先 SSH 隧道 |
+| `9443/tcp` | Agent → Relay WSS/mTLS | GPU 出口 IP 不固定时可对公网开放；可 TCP 透传，禁止 TLS 终止。源站 IP 会随 9443 DNS 公开 |
+| `9100/tcp` | New API → Relay API | 只允许 New API 网段；可 HTTPS 反代。不要跟面板一起反到公网 |
+| `9200/tcp` | 管理 WebUI | 默认听本机；可经 Cloudflare/nginx 反代。建议再加 Cloudflare Access |
 | `8000/tcp` | Agent → 本地模型 | 只监听模型机本机，不要对 Relay 开放 |
+
+云防火墙应关掉 `9100`/`9200`/`22` 的公网入站，而不是靠藏 IP。`9443` 对动态 GPU 必须可达，因此 DNS 会暴露源站地址。
+`9100` 不要和 WebUI 用同一个公网反代出口。
 
 GPU 主机通常在 NAT/防火墙后面，**不需要公网 IP**。Agent 主动连出 `9443` 即可。
 需要公网或端口映射的是 **Relay 的 `9443`**（以及 New API 能访问到的 `9100`）。
@@ -46,7 +49,7 @@ GPU 主机通常在 NAT/防火墙后面，**不需要公网 IP**。Agent 主动�
 |---|---|---|---|
 | Agent 接入 | `relay.example.com` | `wss://relay.example.com:9443/agent/v1/connect` | 各 GPU 上的 Agent |
 | New API 上游 | 同机用回环；分机用 `api.example.com` | New API Base URL：`http://127.0.0.1:9100/v1` 或 `https://api.example.com/v1` | New API |
-| WebUI | 不要公开域名 | SSH 隧道后打开 `http://127.0.0.1:9200/` | 管理员 |
+| WebUI | `relay-ui.example.com`（可选反代） | 安装打印的用户名/密码，或 `relay.env` | 管理员 |
 
 填写时把 `example.com` 换成你的真实域名或内网名字。没有域名时可以用 IP，但证书 SAN 和 URL 必须用同一个 IP。
 
@@ -122,12 +125,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Relay
 服务：NSSM 的 ModelRelayRelay，或任务计划 ModelRelay-Relay
 ```
 
-在 Relay 这台 Windows 上放行 Agent 网段访问 `9443`（不要对公网全开）：
+在 Relay 这台 Windows 上放行 Agent 访问 `9443`。GPU 出口 IP 固定时尽量收紧来源；不固定时对公网开放 `9443`，同时用云防火墙关掉 `9100`/`9200`/`22` 公网入站：
 
 ```powershell
 New-NetFirewallRule -DisplayName "ModelRelay Agent WSS" `
-  -Direction Inbound -Protocol TCP -LocalPort 9443 -Action Allow `
-  -RemoteAddress 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+  -Direction Inbound -Protocol TCP -LocalPort 9443 -Action Allow
 ```
 
 `9100` / `9200` 默认只监听 `127.0.0.1`，一般不必对公网放行。
@@ -609,16 +611,25 @@ sudo tail -n 80 /var/log/modelrelay-relay.err
 
 ### 3.4 验证 Relay API 和 WebUI
 
-查看管理员密码：
+首次安装时，安装器会打印一次：
+
+```text
+WebUI user:     <随机用户名>
+WebUI password: <一次性明文>
+```
+
+凭据写在 `relay.env` 的 `RELAY_ADMIN_USERNAME` 与 `RELAY_ADMIN_PASSWORD`。第二次安装不会再打印，也不会覆盖已有 `relay.env`。改 env **不会**覆盖 SQLite 里已创建的管理员。
 
 ```bash
+sudo sed -n 's/^RELAY_ADMIN_USERNAME=//p' /etc/modelrelay/relay.env
 sudo sed -n 's/^RELAY_ADMIN_PASSWORD=//p' /etc/modelrelay/relay.env
 ```
 
 Windows：
 
 ```powershell
-Select-String -Path C:\ModelRelay\etc\relay\relay.env -Pattern '^RELAY_ADMIN_PASSWORD='
+Select-String -Path C:\ModelRelay\etc\relay\relay.env `
+  -Pattern '^RELAY_ADMIN_(USERNAME|PASSWORD)='
 ```
 
 验证模型目录：
@@ -637,7 +648,9 @@ $token = (Select-String -Path C:\ModelRelay\etc\relay\relay.env -Pattern '^RELAY
 curl.exe -i http://127.0.0.1:9100/v1/models -H "Authorization: Bearer $token"
 ```
 
-WebUI 默认只监听 `127.0.0.1:9200`。远程查看：
+WebUI 默认只监听 `127.0.0.1:9200`。可用 SSH 隧道，也可以用 Cloudflare/nginx 反代到该端口（不要把 `9100` 一起反出去）。反代时在 `relay.yaml` 设置 `admin.trusted_proxies`（本机 nginx 填 `127.0.0.1`），HTTPS 时设 `admin.secure_cookie: true` 或让反代传 `X-Forwarded-Proto: https`。建议再加 Cloudflare Access；可选配置 `admin.turnstile`。
+
+本地或隧道打开：
 
 ```bash
 ssh -L 9200:127.0.0.1:9200 root@relay.example.com
@@ -649,7 +662,7 @@ Windows 客户端可用：
 ssh -L 9200:127.0.0.1:9200 administrator@relay.example.com
 ```
 
-浏览器打开 `http://127.0.0.1:9200/`，使用 `admin` 登录。
+浏览器打开反代域名，或 `http://127.0.0.1:9200/`，使用安装输出 / `relay.env` 里的用户名和密码登录。旧安装若 yaml 仍是 `username: admin`，则用户名仍为 `admin`。
 
 ## 4. 安装并配置 Agent
 
@@ -871,8 +884,8 @@ Base URL: http://127.0.0.1:9100/v1          # New API 与 Relay 同机
 - [ ] Chat 非流式请求成功。
 - [ ] Chat SSE 流式请求成功。
 - [ ] 客户端断开后本地请求能够取消。
-- [ ] `9443` 只允许 Agent 网络访问。
-- [ ] `9100`、`9200` 没有暴露公网。
+- [ ] `9443` 对需要接入的 GPU 可达（出口 IP 不固定时可对公网开放）。
+- [ ] `9100`、`9200` 没有在云防火墙上对公网入站开放（WebUI 走反代而不是直接暴露 9200）。
 - [ ] 数据库、配置和证书公钥已备份。
 - [ ] CA 私钥、Agent 私钥、Relay 私钥和 Token 没有进入仓库。
 
@@ -1095,12 +1108,41 @@ sudo cp -a /etc/model-agent /backup/modelrelay/
 
 ### 8.4 升级和回滚
 
-1. 备份数据库和配置。
-2. 下载 Release 包并校验 `SHA256SUMS`。
-3. 停止服务，保留旧二进制。
-4. 替换二进制并启动服务。
-5. 检查日志、WebUI 和 `/v1/models`。
-6. 失败时恢复旧二进制并重启。
+升级不是热补丁：备份配置和数据，再跑安装器。安装器会先可选 Drain、停进程，再覆盖二进制并拉起。现有 yaml、证书、`relay.env` 不会被覆盖。
+
+Windows 必须先停服务/任务，否则占用中的 `relay.exe`/`agent.exe` 无法覆盖；安装器已自动停止。
+
+进行中的 HTTP/SSE 会断；Agent 随后自己重连 Relay。这是已接受的中断。同域名不改则证书不必重签。
+
+**Linux Relay**
+
+```bash
+sudo tar -C /root -czf modelrelay-backup.tgz /etc/modelrelay /var/lib/modelrelay
+curl -fsSL https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.sh \
+  | sudo bash -s -- --component relay
+sudo journalctl -u modelrelay-relay -n 40 --no-pager
+```
+
+**Windows Relay**（管理员 PowerShell）
+
+```powershell
+Copy-Item C:\ModelRelay\etc C:\ModelRelay\etc.bak -Recurse -Force
+Copy-Item C:\ModelRelay\data C:\ModelRelay\data.bak -Recurse -Force
+$p = Join-Path $env:TEMP "modelrelay-install.ps1"
+Invoke-WebRequest -UseBasicParsing `
+  https://raw.githubusercontent.com/Cardinal85/modelrelay/main/scripts/install.ps1 `
+  -OutFile $p
+powershell -NoProfile -ExecutionPolicy Bypass -File $p -Component Relay
+if (Test-Path C:\ModelRelay\data\ModelRelayRelay.err.log) {
+  Get-Content C:\ModelRelay\data\ModelRelayRelay.err.log -Tail 40
+} else {
+  Get-Content C:\ModelRelay\data\relay.log -Tail 40
+}
+```
+
+**Linux / Windows Agent** 把 `--component agent` / `-Component Agent` 换成对应参数即可。可选：设置 `RELAY_ADMIN_URL`、`RELAY_ADMIN_USERNAME`、`RELAY_ADMIN_PASSWORD` 后安装器会先 Drain 该 `node_id`；没有凭据就跳过，直接停进程。
+
+日志里应出现 `0.2.1 started`。失败时用备份的 `bin` 覆盖回去再启动。
 
 ### 8.5 常用排障
 
@@ -1181,29 +1223,33 @@ certctl inspect -cert /etc/model-agent/gpu-001.crt
 ```text
 GPU Agent  --TCP 9443 mTLS-->  Relay wss_listen     （必须原样 TLS，可 TCP 透传）
 New API    --HTTP 9100------>  Relay http_listen    （可 HTTPS 反代）
-管理员     --HTTP 9200------>  Relay admin.listen   （优先 SSH 隧道，不要公网）
+管理员     --HTTP 9200------>  Relay admin.listen   （可 Cloudflare/nginx 反代；建议 Access）
 ```
 
 | 入口 | 默认监听 | 能否七层 HTTPS 反代 | 证书 |
 |---|---|---|---|
 | Agent WSS | `0.0.0.0:9443` | **否**。只能直连或四层 TCP 透传 | Relay CA 签发的服务端证书 + Agent 客户端证书 |
-| New API | `127.0.0.1:9100` | **可以**。nginx/Caddy/IIS 终止 TLS 后转到 9100 | 可用 Let's Encrypt，与 Agent 证书无关 |
-| WebUI | `127.0.0.1:9200` | 可以但不建议公开 | 同上；更好的做法是 SSH `-L 9200` |
+| New API | `127.0.0.1:9100` | **可以**，但不要跟面板同一公网出口 | 可用 Let's Encrypt，与 Agent 证书无关 |
+| WebUI | `127.0.0.1:9200` | **可以**。反代后设置 `trusted_proxies` / `secure_cookie`；建议 Cloudflare Access + Turnstile | 可用网站证书；源站仍听 9200 |
+
+`9443` 用 DNS-only（灰云）指向源站时，源站 IP 会公开。这是 mTLS 直连的代价，用云防火墙关掉 `9100`/`9200`/`22` 公网入站即可，不必为藏 IP 再加跳板。
 
 常见错误：把 `wss://relay.example.com:443` 指到 nginx，用网站证书。Agent 会校验 Relay CA，且必须出示客户端证书，握手失败。
 
 ### 9.2 推荐拓扑
 
-**小规模（推荐）：Relay 自己听 9443，不反代 Agent。**
+**动态 GPU + 面板反代（常见）：Relay 自己听 9443，WebUI 经 Cloudflare 反代。**
 
-1. 防火墙只对 GPU 网段开放 `9443/tcp`。
-2. Agent：`wss://relay.example.com:9443/agent/v1/connect`。
-3. New API 与 Relay 同机：Base URL `http://127.0.0.1:9100/v1`。
-4. WebUI 用 SSH 隧道。
+1. 云防火墙：`9443/tcp` 对公网开放；`9100`/`9200`/`22` 不对公网入站。
+2. Agent：`wss://relay.example.com:9443/agent/v1/connect`（DNS 仅解析，不要橙色云）。
+3. New API 与 Relay 同机：Base URL `http://127.0.0.1:9100/v1`，不要把 9100 跟面板一起反出去。
+4. WebUI：本机 `127.0.0.1:9200`，nginx/Cloudflare 反代到独立域名；`admin.trusted_proxies` 含反代地址。
+
+**GPU 网段固定时：** 防火墙可以把 `9443` 收紧到来源网段。
 
 **New API 与 Relay 分机：** 只给 `9100` 做内网反代或内网防火墙放行，仍然不要把 `9100` 放到公网。
 
-**必须把 9443 放在负载均衡后面时：** 使用 **TCP/四层**（nginx `stream`、HAProxy TCP、AWS NLB、云厂商「TCP 转发」）。Relay 继续用自己的证书做 mTLS。负载均衡不要装网站证书。
+**必须把 9443 放在负载均衡后面时：** 使用 **TCP/四层**（nginx `stream`、HAProxy TCP、AWS NLB、云厂商「TCP 转发」）。Relay 继续用自己的证书做 mTLS。负载均衡不要装网站证书。同域名不改则证书不必重签。
 
 ### 9.3 证书 SAN 与 URL 对照
 
@@ -1327,10 +1373,10 @@ backend relay_wss
 |---|---|---|
 | AWS NLB / GCP TCP / Azure LB（四层） | 可以，TCP 转发 | 可以，但不需要 |
 | AWS ALB / 七层 SLB / CDN | 不可以 | 可以（内网） |
-| Cloudflare Proxied | 不可以 | 不建议把内部 API 放到公网 CDN |
+| Cloudflare Proxied | 不可以（会拆 mTLS） | 不建议把 9100 放到公网 CDN |
 | 路由器端口映射 | 可以：外网 9443 → Relay 9443 | 仅映射给 New API 所在网段 |
 
-安全组/防火墙示例：`9443` 来源 = GPU 出口 IP 或专线网段；`9100` 来源 = New API 主机；`9200` 不开放。
+WebUI 可以用 Cloudflare 橙色云反代到源站 `9200`（独立域名）。`9443` 必须 DNS-only。安全组：`9443` 对动态 GPU 可对公网开放；`9100`/`9200`/`22` 不对公网入站。源站 IP 会随 9443 DNS 公开，靠防火墙关口，而不是藏 IP。
 
 ### 9.10 Linux 防火墙
 

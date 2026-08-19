@@ -20,7 +20,7 @@
 | `tls_cert` / `tls_key` | Relay 服务端证书（WSS） | 必填 |
 | `agent_ca` | 验证 Agent 客户端证书的 CA | 必填 |
 | `internal_auth.token` | New API 调用 Relay 的内部认证 Token | 必填（启用时） |
-| `limits.max_body_bytes` | 请求体上限 | 64 MiB |
+| `limits.max_body_bytes` | 请求体上限 | 200 MiB |
 | `limits.max_concurrency` | Relay 全局并发 | 64 |
 | `limits.queue_length` | 有界队列长度 | 256 |
 | `limits.queue_timeout_sec` | 排队超时 | 30 |
@@ -29,7 +29,10 @@
 | `limits.request_timeout_sec` | 整体请求超时 | 1800 |
 | `limits.heartbeat_timeout_sec` | 心跳超时（suspect/offline 判定） | 60 |
 | `admin.listen` | 管理 API / WebUI 监听 | `127.0.0.1:9200` |
-| `admin.users` | 初始管理员（角色 admin/readonly） | 空 |
+| `admin.trusted_proxies` | 可信反代 IP；仅这些来源才信 `CF-Connecting-IP` / `X-Forwarded-For` | `127.0.0.1`、`::1` |
+| `admin.secure_cookie` | 登录 Cookie 加 `Secure`；或由可信反代传 `X-Forwarded-Proto: https` | false |
+| `admin.turnstile.site_key` / `secret_key` | 可选 Cloudflare Turnstile，必须成对配置 | 空 |
+| `admin.users` | 初始管理员（首次写入 SQLite；角色 admin/readonly） | 空 |
 | `store.db_path` | SQLite 路径 | `modelrelay.db` |
 | `retention.keep_prompt_response` | 是否保存完整 Prompt/Response | false |
 | `retention.retention_days` | 摘要/审计保留天数 | 30 |
@@ -42,7 +45,7 @@
 | `node_id` | 节点标识（必须与客户端证书 CN 一致） | 必填 |
 | `relays[].url` | Relay 地址，形如 `wss://host:9443/agent/v1/connect` | 至少 1 个 |
 | `relays[].priority` | 越小越优先（主备组网） | — |
-| `max_body_bytes` | Agent 侧单请求组装缓冲上限 | 16 MiB |
+| `max_body_bytes` | Agent 侧单请求组装缓冲上限 | 200 MiB |
 | `tls.cert` / `tls.key` | Agent 客户端证书与私钥（私钥仅本机） | 必填 |
 | `tls.ca` | Relay 服务端 CA | 必填 |
 | `tls.insecure_skip_verify` | 跳过服务端校验 | 禁止，必须为 false |

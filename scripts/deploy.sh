@@ -65,10 +65,11 @@ yaml_quote() {
 }
 
 random_hex() {
+  local n="${1:-32}"
   if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 32
+    openssl rand -hex "$n"
   else
-    od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
+    od -An -N"$n" -tx1 /dev/urandom | tr -d ' \n'
   fi
 }
 
@@ -135,7 +136,6 @@ check_binary() {
 
 if [[ "$component" == relay || "$component" == both ]]; then check_binary relay; fi
 if [[ "$component" == agent || "$component" == both ]]; then check_binary agent; fi
-if [[ -f "$source_dir/certctl" ]]; then check_binary certctl; fi
 
 copy_binary() {
   local name="$1"
@@ -144,9 +144,46 @@ copy_binary() {
   install -m 0755 "$source_dir/$name" "$bin_dir/$name"
 }
 
-if [[ "$component" == relay || "$component" == both ]]; then copy_binary relay; fi
-if [[ "$component" == agent || "$component" == both ]]; then copy_binary agent; fi
-if [[ -f "$source_dir/certctl" ]]; then copy_binary certctl; fi
+stop_component() {
+  local name="$1"
+  if [[ "$platform" == linux ]]; then
+    systemctl stop "modelrelay-$name" >/dev/null 2>&1 || true
+  else
+    launchctl bootout "system/com.modelrelay.$name" >/dev/null 2>&1 || true
+  fi
+}
+
+maybe_drain_agent() {
+  local url="${RELAY_ADMIN_URL:-}"
+  local user="${RELAY_ADMIN_USERNAME:-}"
+  local pass="${RELAY_ADMIN_PASSWORD:-}"
+  local envf="$relay_conf_dir/relay.env"
+  if [[ -z "$user" && -f "$envf" ]]; then
+    user="$(sed -n 's/^RELAY_ADMIN_USERNAME=//p' "$envf" | head -n1)"
+  fi
+  if [[ -z "$pass" && -f "$envf" ]]; then
+    pass="$(sed -n 's/^RELAY_ADMIN_PASSWORD=//p' "$envf" | head -n1)"
+  fi
+  [[ -n "$url" && -n "$user" && -n "$pass" && -n "$node_id" ]] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local origin="${url%/}"
+  echo "attempting drain of $node_id via $origin ..."
+  local cookiejar
+  cookiejar="$(mktemp)"
+  if curl -fsS -c "$cookiejar" -b "$cookiejar" \
+      -H "Origin: $origin" -H "Content-Type: application/json" \
+      -d "{\"username\":\"$user\",\"password\":\"$pass\"}" \
+      "$origin/api/login" >/dev/null \
+    && curl -fsS -c "$cookiejar" -b "$cookiejar" \
+      -H "Origin: $origin" -H "Content-Type: application/json" \
+      -d '{"grace_seconds":5}' \
+      "$origin/api/nodes/${node_id}/drain" >/dev/null; then
+    sleep 3
+  else
+    echo "drain skipped"
+  fi
+  rm -f "$cookiejar"
+}
 
 if [[ "$platform" == linux ]]; then
   id modelrelay >/dev/null 2>&1 || useradd --system --home-dir "$data_dir" \
@@ -184,7 +221,7 @@ internal_auth:
   enabled: true
   token: "\${RELAY_INTERNAL_TOKEN}"
 limits:
-  max_body_bytes: 67108864
+  max_body_bytes: 209715200
   max_concurrency: 64
   queue_length: 256
   queue_timeout_sec: 30
@@ -195,8 +232,10 @@ limits:
 admin:
   listen: "127.0.0.1:9200"
   session_ttl_min: 30
+  trusted_proxies: ["127.0.0.1", "::1"]
+  secure_cookie: false
   users:
-    - username: admin
+    - username: "\${RELAY_ADMIN_USERNAME}"
       password: "\${RELAY_ADMIN_PASSWORD}"
       role: admin
 store:
@@ -215,7 +254,7 @@ write_agent_config() {
   [[ -e "$config" ]] && return
   cat >"$config" <<EOF
 node_id: $(yaml_quote "$node_id")
-max_body_bytes: 16777216
+max_body_bytes: 209715200
 relays:
   - url: $(yaml_quote "${relay_url:-wss://relay.example.com:9443/agent/v1/connect}")
     priority: 1
@@ -242,14 +281,31 @@ EOF
 
 make_env_file() {
   local file="$1"
-  if [[ -e "$file" ]]; then chmod 0600 "$file"; return; fi
+  if [[ -e "$file" ]]; then
+    chmod 0600 "$file"
+    if [[ "$file" == *relay.env ]]; then
+      echo "kept existing $file"
+      echo "WebUI credentials: RELAY_ADMIN_USERNAME / RELAY_ADMIN_PASSWORD in that file."
+      echo "They are printed only on first install. Changing env later does not update SQLite."
+    fi
+    return
+  fi
   install -d -m 0750 "$(dirname "$file")"
   if [[ "$file" == *relay.env ]]; then
+    local user pass
+    user="$(random_hex 8)"
+    pass="$(random_hex 32)"
     cat >"$file" <<EOF
-RELAY_INTERNAL_TOKEN=$(random_hex)
-RELAY_ADMIN_PASSWORD=$(random_hex)
+RELAY_INTERNAL_TOKEN=$(random_hex 32)
+RELAY_ADMIN_USERNAME=$user
+RELAY_ADMIN_PASSWORD=$pass
 EOF
-    echo "created $file; save the generated admin password before sharing the host"
+    echo
+    echo "WebUI user:     $user"
+    echo "WebUI password: $pass"
+    echo "Save these now. They are stored in $file and will not be printed again."
+    echo "If you lose them, reset the admin user in SQLite or recreate the database."
+    echo
   else
     printf 'LOCAL_MODEL_API_KEY=\n' >"$file"
   fi
@@ -263,7 +319,14 @@ fi
 if [[ "$component" == agent || "$component" == both ]]; then
   write_agent_config
   make_env_file "$agent_conf_dir/agent.env"
+  maybe_drain_agent
 fi
+
+if [[ "$component" == relay || "$component" == both ]]; then stop_component relay; fi
+if [[ "$component" == agent || "$component" == both ]]; then stop_component agent; fi
+if [[ "$component" == relay || "$component" == both ]]; then copy_binary relay; fi
+if [[ "$component" == agent || "$component" == both ]]; then copy_binary agent; fi
+if [[ -f "$source_dir/certctl" ]]; then copy_binary certctl; fi
 
 if [[ "$platform" == linux ]]; then
   if [[ "$component" == relay || "$component" == both ]]; then

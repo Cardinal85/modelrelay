@@ -73,7 +73,7 @@ func DefaultAgent() *Agent {
 		MaxConcurrency:     8,
 		TLSVerify:          true,
 	}
-	a.MaxBodyBytes = 16 << 20
+	a.MaxBodyBytes = 200 << 20
 	a.Probe = Probe{
 		IntervalSec: 600,
 		TestModel:   "",
@@ -123,7 +123,7 @@ func (a *Agent) Validate() error {
 		a.Local.MaxConcurrency = 8
 	}
 	if a.MaxBodyBytes <= 0 {
-		a.MaxBodyBytes = 16 << 20
+		a.MaxBodyBytes = 200 << 20
 	}
 	if a.HeartbeatSeconds <= 0 {
 		a.HeartbeatSeconds = 20

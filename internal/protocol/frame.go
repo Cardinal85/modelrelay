@@ -1,10 +1,13 @@
 package protocol
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // 数据帧类型。
@@ -136,15 +139,16 @@ func DecodeFrame(r io.Reader) (*Frame, error) {
 	return f, nil
 }
 
-// RequestIDBytes 将字符串 request_id 转为 16 字节 UUID 字节。
-// 非 UUID 字符串按 SHA-256 截断处理，保证可逆性不必要，但需稳定。
+// RequestIDBytes 将字符串 request_id 转为 16 字节。
+// 标准 UUID（可带连字符）按 128-bit 解析；其它字符串取 SHA-256 前 16 字节。
 func RequestIDBytes(id string) [16]byte {
 	var out [16]byte
-	b := []byte(id)
-	if len(b) >= 16 {
-		copy(out[:], b[:16])
-	} else {
+	compact := strings.ReplaceAll(id, "-", "")
+	if b, err := hex.DecodeString(compact); err == nil && len(b) == 16 {
 		copy(out[:], b)
+		return out
 	}
+	sum := sha256.Sum256([]byte(id))
+	copy(out[:], sum[:16])
 	return out
 }

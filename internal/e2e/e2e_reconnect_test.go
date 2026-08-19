@@ -44,6 +44,7 @@ func newRelayStack(t *testing.T, dir, name string, wssPort int) *relayStack {
 		RequestTimeoutMs:  120000,
 		HeartbeatTimeoutS: 8,
 		InternalAuthToken: "test-token",
+		InternalAuthEnabled: true,
 	})
 	wss, err := relay.NewWSSServer(srv,
 		filepath.Join(dir, "relay.crt"), filepath.Join(dir, "relay.key"),

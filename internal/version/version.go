@@ -7,7 +7,7 @@ const (
 	// Name 是产品名称。
 	Name = "ModelRelay"
 	// Version 是当前版本号。
-	Version = "0.2.0"
+	Version = "0.2.1"
 )
 
 // AgentVersion 返回 agent 版本字符串。

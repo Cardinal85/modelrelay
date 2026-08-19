@@ -27,6 +27,9 @@ param(
     [string]$AgentCert = "",
     [string]$AgentKey = "",
     [string]$RelayCA = "",
+    [string]$AdminUrl = $env:RELAY_ADMIN_URL,
+    [string]$AdminUser = $env:RELAY_ADMIN_USERNAME,
+    [string]$AdminPassword = $env:RELAY_ADMIN_PASSWORD,
     [switch]$NoStart
 )
 
@@ -48,11 +51,18 @@ function Quote-Yaml([string]$Value) {
     return "'" + $Value.Replace("'", "''") + "'"
 }
 
-function New-RandomHex {
-    $bytes = New-Object byte[] 32
+function New-RandomHex([int]$Bytes = 32) {
+    $buf = New-Object byte[] $Bytes
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-    return (($bytes | ForEach-Object { $_.ToString("x2") }) -join "")
+    try { $rng.GetBytes($buf) } finally { $rng.Dispose() }
+    return (($buf | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+
+function Read-EnvValue([string]$Path, [string]$Key) {
+    if (-not (Test-Path $Path -PathType Leaf)) { return "" }
+    $m = Select-String -Path $Path -Pattern ("^" + [regex]::Escape($Key) + "=(.*)$") | Select-Object -First 1
+    if ($null -eq $m) { return "" }
+    return $m.Matches.Groups[1].Value
 }
 
 function Ensure-Directory([string]$Path) {
@@ -81,7 +91,7 @@ internal_auth:
   enabled: true
   token: "`${RELAY_INTERNAL_TOKEN}"
 limits:
-  max_body_bytes: 67108864
+  max_body_bytes: 209715200
   max_concurrency: 64
   queue_length: 256
   queue_timeout_sec: 30
@@ -92,8 +102,10 @@ limits:
 admin:
   listen: "127.0.0.1:9200"
   session_ttl_min: 30
+  trusted_proxies: ["127.0.0.1", "::1"]
+  secure_cookie: false
   users:
-    - username: admin
+    - username: "`${RELAY_ADMIN_USERNAME}"
       password: "`${RELAY_ADMIN_PASSWORD}"
       role: admin
 store:
@@ -111,7 +123,7 @@ function Write-AgentConfig {
     if (Test-Path $AgentConfig -PathType Leaf) { return }
     $text = @"
 node_id: $(Quote-Yaml $NodeId)
-max_body_bytes: 16777216
+max_body_bytes: 209715200
 relays:
   - url: $(Quote-Yaml $RelayUrl)
     priority: 1
@@ -138,15 +150,71 @@ log_level: info
 }
 
 function Ensure-EnvFile([string]$Path, [bool]$Relay) {
-    if (Test-Path $Path -PathType Leaf) { return }
+    if (Test-Path $Path -PathType Leaf) {
+        if ($Relay) {
+            Write-Host "kept existing $Path"
+            Write-Host "WebUI credentials: RELAY_ADMIN_USERNAME / RELAY_ADMIN_PASSWORD in that file."
+            Write-Host "They are printed only on first install. Changing env later does not update SQLite."
+        }
+        return
+    }
     if ($Relay) {
+        $user = New-RandomHex 8
+        $pass = New-RandomHex 32
         @(
-            "RELAY_INTERNAL_TOKEN=$(New-RandomHex)"
-            "RELAY_ADMIN_PASSWORD=$(New-RandomHex)"
+            "RELAY_INTERNAL_TOKEN=$(New-RandomHex 32)"
+            "RELAY_ADMIN_USERNAME=$user"
+            "RELAY_ADMIN_PASSWORD=$pass"
         ) | Set-Content -Path $Path -Encoding ASCII
-        Write-Host "created $Path; save the generated admin password before sharing the host"
+        Write-Host ""
+        Write-Host "WebUI user:     $user"
+        Write-Host "WebUI password: $pass"
+        Write-Host "Save these now. They are stored in $Path and will not be printed again."
+        Write-Host "If you lose them, reset the admin user in SQLite or recreate the database."
+        Write-Host ""
     } else {
         "LOCAL_MODEL_API_KEY=" | Set-Content -Path $Path -Encoding ASCII
+    }
+}
+
+function Stop-ModelRelayComponent([string]$NssmName, [string]$TaskName, [string]$ProcName) {
+    Write-Host "stopping $ProcName if running..."
+    $nssm = Get-Command nssm.exe -ErrorAction SilentlyContinue
+    if ($null -ne $nssm) {
+        & $nssm.Source stop $NssmName 2>$null | Out-Null
+    }
+    Stop-Service -Name $NssmName -Force -ErrorAction SilentlyContinue
+    foreach ($tn in @($TaskName, "ModelRelay-$ProcName", "ModelRelay-ModelRelay$ProcName")) {
+        Stop-ScheduledTask -TaskName $tn -ErrorAction SilentlyContinue
+    }
+    Get-Process -Name $ProcName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
+function Try-DrainAgent {
+    param(
+        [string]$AdminUrl,
+        [string]$NodeId,
+        [string]$User,
+        [string]$Pass
+    )
+    if ([string]::IsNullOrWhiteSpace($AdminUrl) -or [string]::IsNullOrWhiteSpace($NodeId) -or
+        [string]::IsNullOrWhiteSpace($User) -or [string]::IsNullOrWhiteSpace($Pass)) {
+        return
+    }
+    $origin = $AdminUrl.TrimEnd("/")
+    Write-Host "attempting drain of $NodeId via $origin ..."
+    try {
+        $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
+        Invoke-RestMethod -Uri "$origin/api/login" -Method POST -ContentType "application/json" `
+            -WebSession $session -Headers @{ Origin = $origin } `
+            -Body (@{ username = $User; password = $Pass } | ConvertTo-Json) | Out-Null
+        Invoke-RestMethod -Uri "$origin/api/nodes/$NodeId/drain" -Method POST -ContentType "application/json" `
+            -WebSession $session -Headers @{ Origin = $origin } `
+            -Body (@{ grace_seconds = 5 } | ConvertTo-Json) | Out-Null
+        Start-Sleep -Seconds 3
+    } catch {
+        Write-Host "drain skipped: $($_.Exception.Message)"
     }
 }
 
@@ -236,10 +304,6 @@ Ensure-Directory $DataDir
 Ensure-Directory $RelayConfigDir
 Ensure-Directory $AgentConfigDir
 
-if ($Component -eq "Relay" -or $Component -eq "Both") { Copy-Binary "relay" }
-if ($Component -eq "Agent" -or $Component -eq "Both") { Copy-Binary "agent" }
-if (Test-Path (Join-Path $SourceDir "certctl.exe") -PathType Leaf) { Copy-Binary "certctl" }
-
 $relayMode = $null
 $agentMode = $null
 $relayRunner = $null
@@ -248,12 +312,34 @@ $agentRunner = $null
 if ($Component -eq "Relay" -or $Component -eq "Both") {
     Write-RelayConfig
     Ensure-EnvFile $RelayEnv $true
-    $relayRunner = Write-Runner "relay" (Join-Path $BinDir "relay.exe") $RelayConfig $RelayEnv
-    $relayMode = Install-NssmTask "ModelRelayRelay" $relayRunner $DataDir "ModelRelay-Relay"
 }
 if ($Component -eq "Agent" -or $Component -eq "Both") {
     Write-AgentConfig
     Ensure-EnvFile $AgentEnv $false
+}
+
+if ($Component -eq "Agent" -or $Component -eq "Both") {
+    if ([string]::IsNullOrWhiteSpace($AdminUser)) { $AdminUser = Read-EnvValue $RelayEnv "RELAY_ADMIN_USERNAME" }
+    if ([string]::IsNullOrWhiteSpace($AdminPassword)) { $AdminPassword = Read-EnvValue $RelayEnv "RELAY_ADMIN_PASSWORD" }
+    Try-DrainAgent -AdminUrl $AdminUrl -NodeId $NodeId -User $AdminUser -Pass $AdminPassword
+}
+
+if ($Component -eq "Relay" -or $Component -eq "Both") {
+    Stop-ModelRelayComponent "ModelRelayRelay" "ModelRelay-Relay" "relay"
+}
+if ($Component -eq "Agent" -or $Component -eq "Both") {
+    Stop-ModelRelayComponent "ModelRelayAgent" "ModelRelay-Agent" "agent"
+}
+
+if ($Component -eq "Relay" -or $Component -eq "Both") { Copy-Binary "relay" }
+if ($Component -eq "Agent" -or $Component -eq "Both") { Copy-Binary "agent" }
+if (Test-Path (Join-Path $SourceDir "certctl.exe") -PathType Leaf) { Copy-Binary "certctl" }
+
+if ($Component -eq "Relay" -or $Component -eq "Both") {
+    $relayRunner = Write-Runner "relay" (Join-Path $BinDir "relay.exe") $RelayConfig $RelayEnv
+    $relayMode = Install-NssmTask "ModelRelayRelay" $relayRunner $DataDir "ModelRelay-Relay"
+}
+if ($Component -eq "Agent" -or $Component -eq "Both") {
     $agentRunner = Write-Runner "agent" (Join-Path $BinDir "agent.exe") $AgentConfig $AgentEnv
     $agentMode = Install-NssmTask "ModelRelayAgent" $agentRunner $DataDir "ModelRelay-Agent"
 }

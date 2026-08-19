@@ -1,6 +1,6 @@
 # ModelRelay
 
-当前版本：**0.2.0**
+当前版本：**0.2.1**
 
 让 New API 等 OpenAI-compatible 网关访问没有公网 IP 的 GPU 模型服务器。
 ModelRelay 不替代 New API，也不替代 vLLM / SGLang / Ollama，只在两者之间提供
@@ -74,9 +74,11 @@ WSS `:9443` 必须用 Relay CA 签发的服务端证书，不要改成 Let's Enc
 
 | 入口 | 默认 | 说明 |
 |---|---|---|
-| Agent | `wss://relay.example.com:9443/agent/v1/connect` | mTLS，只能直连或 TCP 透传，不能套网站 HTTPS |
-| New API | `http://127.0.0.1:9100/v1` | 可 HTTPS 反代；不要写成 `wss://...:9443` |
-| WebUI | `http://127.0.0.1:9200/` | 用 SSH 隧道，不要暴露公网 |
+| Agent | `wss://relay.example.com:9443/agent/v1/connect` | mTLS，只能直连或 TCP 透传，不能套网站 HTTPS。GPU IP 不固定时可对公网开放 9443 |
+| New API | `http://127.0.0.1:9100/v1` | 可 HTTPS 反代；不要写成 `wss://...:9443`，也不要跟面板一起反到公网 |
+| WebUI | `http://127.0.0.1:9200/` 或反代域名 | 看安装打印的用户名/密码（也在 `relay.env`）；建议 Cloudflare Access |
+
+升级再跑安装器即可（会先停进程再换二进制，证书和配置保留）。
 
 证书 SAN 必须包含 Agent 实际连接的主机名或 IP。详见 [部署指南 0.1、9 节](docs/deployment.md)。
 

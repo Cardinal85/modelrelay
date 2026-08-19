@@ -25,11 +25,13 @@ import (
 // WSSPath 是 Agent 接入路径。
 const WSSPath = "/agent/v1/connect"
 
-// upgrader 允许跨来源（Agent 为程序，非浏览器）。
+// upgrader 只接受本程序 Agent 的固定 Origin，拒绝浏览器跨站连接。
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  64 * 1024,
 	WriteBufferSize: 64 * 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		return r.Header.Get("Origin") == protocol.AgentOrigin
+	},
 }
 
 // wsConn 包装底层 WebSocket 连接，串行化写入（gorilla 只允许一个并发写者）。
@@ -140,11 +142,16 @@ func (w *WSSServer) closeAllConns() {
 
 // handleConnect 处理 Agent 的 WSS 连接。
 func (w *WSSServer) handleConnect(rw http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != protocol.AgentOrigin {
+		http.Error(rw, "origin not allowed", http.StatusForbidden)
+		return
+	}
 	raw, err := upgrader.Upgrade(rw, r, nil)
 	if err != nil {
 		log.Printf("relay: ws upgrade failed: %v", err)
 		return
 	}
+	raw.SetReadLimit(protocol.MaxWSMessage)
 	conn := &wsConn{conn: raw}
 	w.connsMu.Lock()
 	w.conns[raw] = struct{}{}
@@ -165,6 +172,10 @@ func (w *WSSServer) handleConnect(rw http.ResponseWriter, r *http.Request) {
 	}
 	if mt != websocket.TextMessage {
 		log.Printf("relay: hello must be text message")
+		return
+	}
+	if int64(len(data)) > protocol.MaxControlMessage {
+		log.Printf("relay: hello too large")
 		return
 	}
 	typ, rawMsg, err := protocol.ParseControl(data)
@@ -360,6 +371,10 @@ func (w *WSSServer) readLoop(node *Node, conn *wsConn, raw *websocket.Conn) {
 		}
 		switch mt {
 		case websocket.TextMessage:
+			if int64(len(data)) > protocol.MaxControlMessage {
+				log.Printf("relay: node %s control message too large (%d)", node.ID, len(data))
+				return
+			}
 			typ, rawMsg, err := protocol.ParseControl(data)
 			if err != nil {
 				log.Printf("relay: node %s bad control: %v", node.ID, err)
@@ -393,7 +408,7 @@ func (w *WSSServer) dispatchControl(node *Node, conn *wsConn, typ string, raw []
 		if err := json.Unmarshal(raw, &rh); err != nil {
 			return true
 		}
-		if p := w.srv.pending.get(protocol.RequestIDBytes(rh.RequestID)); p != nil {
+		if p := w.pendingOwnedBy(node, protocol.RequestIDBytes(rh.RequestID)); p != nil {
 			select {
 			case p.headers <- rh:
 			default:
@@ -404,7 +419,7 @@ func (w *WSSServer) dispatchControl(node *Node, conn *wsConn, typ string, raw []
 		if err := json.Unmarshal(raw, &d); err != nil {
 			return true
 		}
-		if p := w.srv.pending.get(protocol.RequestIDBytes(d.RequestID)); p != nil {
+		if p := w.pendingOwnedBy(node, protocol.RequestIDBytes(d.RequestID)); p != nil {
 			select {
 			case p.done <- d:
 			default:
@@ -415,7 +430,7 @@ func (w *WSSServer) dispatchControl(node *Node, conn *wsConn, typ string, raw []
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return true
 		}
-		if p := w.srv.pending.get(protocol.RequestIDBytes(e.RequestID)); p != nil {
+		if p := w.pendingOwnedBy(node, protocol.RequestIDBytes(e.RequestID)); p != nil {
 			select {
 			case p.err <- e:
 			default:
@@ -445,10 +460,18 @@ func (w *WSSServer) dispatchControl(node *Node, conn *wsConn, typ string, raw []
 	return true
 }
 
+func (w *WSSServer) pendingOwnedBy(node *Node, reqID [16]byte) *pendingRequest {
+	p := w.srv.pending.get(reqID)
+	if p == nil || p.nodeID != node.ID {
+		return nil
+	}
+	return p
+}
+
 func (w *WSSServer) dispatchFrame(node *Node, f *protocol.Frame) {
-	p := w.srv.pending.get(f.RequestID)
+	p := w.pendingOwnedBy(node, f.RequestID)
 	if p == nil {
-		log.Printf("relay: frame for unknown request (seq %d), dropping", f.Seq)
+		log.Printf("relay: frame for unknown or foreign request (seq %d), dropping", f.Seq)
 		return
 	}
 	select {

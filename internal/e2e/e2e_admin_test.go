@@ -43,6 +43,9 @@ func (c *adminClient) doRaw(path, method, body string) *http.Response {
 		c.t.Fatalf("req: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if method != http.MethodGet && method != http.MethodHead {
+		req.Header.Set("Origin", c.env.adminURL)
+	}
 	resp, err := c.client.Do(req)
 	if err != nil {
 		c.t.Fatalf("do %s: %v", path, err)
@@ -289,8 +292,14 @@ func TestAdminWebUIServed(t *testing.T) {
 // loginRaw 执行一次登录并返回状态码（不保留会话）。
 func loginRaw(t *testing.T, env *testEnv, user, pass string) int {
 	t.Helper()
-	resp, err := http.Post(env.adminURL+"/api/login", "application/json",
+	req, err := http.NewRequest(http.MethodPost, env.adminURL+"/api/login",
 		strings.NewReader(fmt.Sprintf(`{"username":%q,"password":%q}`, user, pass)))
+	if err != nil {
+		t.Fatalf("login req: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", env.adminURL)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("login req: %v", err)
 	}

@@ -184,6 +184,11 @@ func (c *AdminClient) do(method, path string, body []byte) ([]byte, error) {
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if method != http.MethodGet && method != http.MethodHead {
+		if u, err := url.Parse(c.baseURL); err == nil && u.Host != "" {
+			req.Header.Set("Origin", u.Scheme+"://"+u.Host)
+		}
+	}
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return nil, err
