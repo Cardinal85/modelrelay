@@ -1,4 +1,4 @@
-﻿# ModelRelay optional local toolchain (PowerShell)
+# ModelRelay optional local toolchain (PowerShell)
 $here = $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($here)) { $here = Split-Path -Parent $MyInvocation.MyCommand.Path }
 $root = (Resolve-Path (Join-Path $here "..")).Path
@@ -15,3 +15,4 @@ if (Test-Path (Join-Path $root ".tools\gopath")) {
     $env:GOPATH = Join-Path $root ".tools\gopath"
     $env:GOCACHE = Join-Path $root ".tools\gocache"
 }
+$env:MISE_PWSH_CHPWD_WARNING = "0"

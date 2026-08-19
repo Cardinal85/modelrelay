@@ -72,7 +72,7 @@ function loadTurnstileScript() {
 
 async function setupTurnstile() {
   try {
-    const res = await fetch("/api/login-config", { credentials: "same-origin" });
+    const res = await fetch("/api/login-config", { cache: "no-store", credentials: "same-origin" });
     if (!res.ok) return;
     const cfg = await res.json();
     turnstileSiteKey = cfg.turnstile_site_key || "";
@@ -82,7 +82,11 @@ async function setupTurnstile() {
     if (window.turnstile && turnstileWidgetId == null) {
       turnstileWidgetId = window.turnstile.render("#turnstile-wrap", { sitekey: turnstileSiteKey });
     }
-  } catch (e) { /* Turnstile 为可选 */ }
+  } catch (e) {
+    const el = $("#login-error");
+    el.textContent = "人机验证加载失败，请刷新页面后重试";
+    el.classList.remove("hidden");
+  }
 }
 
 function turnstileToken() {
@@ -98,6 +102,11 @@ function resetTurnstile() {
 async function doLogin(e) {
   e.preventDefault();
   $("#login-error").classList.add("hidden");
+  if (turnstileSiteKey && !turnstileToken()) {
+    $("#login-error").textContent = "请先完成人机验证";
+    $("#login-error").classList.remove("hidden");
+    return;
+  }
   try {
     const r = await api("/login", {
       method: "POST",
@@ -413,7 +422,7 @@ async function boot() {
     startAuto();
   } catch (e) {
     showLogin();
-    setupTurnstile();
+    await setupTurnstile();
   }
 }
 boot();

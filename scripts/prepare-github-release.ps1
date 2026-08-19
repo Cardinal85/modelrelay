@@ -12,7 +12,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Version = "0.2.1",
+    [string]$Version = "0.2.2",
     [string]$DistDir = "",
     [string]$OutputDir = "",
     [switch]$Clean

@@ -18,8 +18,12 @@ $ErrorActionPreference = "Stop"
 # 不继承前一次交叉编译残留的目标环境。尤其是长驻 IDE/Shell 中，
 # -All 设置的 GOOS/GOARCH 若未清理，会让后续 go test 尝试启动
 # darwin/linux 测试二进制并报 “%1 is not a valid Win32 application”。
-$nativeGOOS = (((& go env GOHOSTOS) 2>$null | Select-Object -Last 1).ToString()).Trim().ToLowerInvariant()
-$nativeGOARCH = (((& go env GOHOSTARCH) 2>$null | Select-Object -Last 1).ToString()).Trim().ToLowerInvariant()
+$nativeGOOS = ((& go env GOHOSTOS) 2>$null | Where-Object { $_ -match '^(windows|linux|darwin)$' } | Select-Object -Last 1)
+$nativeGOARCH = ((& go env GOHOSTARCH) 2>$null | Where-Object { $_ -match '^(amd64|arm64|386|arm)$' } | Select-Object -Last 1)
+if (-not $nativeGOOS) { $nativeGOOS = "windows" }
+if (-not $nativeGOARCH) { $nativeGOARCH = "amd64" }
+$nativeGOOS = $nativeGOOS.ToString().Trim().ToLowerInvariant()
+$nativeGOARCH = $nativeGOARCH.ToString().Trim().ToLowerInvariant()
 $env:GOOS = $nativeGOOS
 $env:GOARCH = $nativeGOARCH
 $env:GOARM = $null
@@ -48,7 +52,7 @@ if ($Test) {
 }
 
 $VERSION = go run ./cmd/certctl version | ForEach-Object { $_ -match "certctl (.+?) \(" | Out-Null; $Matches[1] }
-if (-not $VERSION) { $VERSION = "0.2.0" }
+if (-not $VERSION) { $VERSION = "0.2.2" }
 
 if ($All) {
     # Targets: Linux amd64/arm64/386/arm, Windows amd64/arm64/386, macOS amd64/arm64

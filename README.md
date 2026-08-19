@@ -1,6 +1,6 @@
 # ModelRelay
 
-当前版本：**0.2.1**
+当前版本：**0.2.2**
 
 让 New API 等 OpenAI-compatible 网关访问没有公网 IP 的 GPU 模型服务器。
 ModelRelay 不替代 New API，也不替代 vLLM / SGLang / Ollama，只在两者之间提供
@@ -19,6 +19,11 @@ ModelRelay 不替代 New API，也不替代 vLLM / SGLang / Ollama，只在两�
 | certmgr | 图形界面：离线签发、检查、导出；可选登录 Relay 吊销 |
 
 CA 私钥只留证书管理机。Agent 私钥必须在 GPU 本机用 `certctl csr` 生成。
+
+## 0.2.2 更新
+
+- 修复经 Cloudflare 反代时登录页缓存旧 `app.js`、Turnstile 校验失败。
+- WebUI HTML 不缓存，JS/CSS 带版本号；Turnstile 不再误传边缘 IP。
 
 ## 快速部署
 

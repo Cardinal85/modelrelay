@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -128,12 +129,19 @@ func (a *AdminServer) staticHandler() http.Handler {
 		switch {
 		case strings.HasSuffix(name, ".html"):
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			v := version.RelayVersion()
+			data = bytes.ReplaceAll(data, []byte(`href="/static/style.css"`), []byte(`href="/static/style.css?v=`+v+`"`))
+			data = bytes.ReplaceAll(data, []byte(`src="/static/app.js"`), []byte(`src="/static/app.js?v=`+v+`"`))
 		case strings.HasSuffix(name, ".js"):
 			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		case strings.HasSuffix(name, ".css"):
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		default:
 			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set("Cache-Control", "no-store")
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(data)
@@ -163,6 +171,7 @@ func (a *AdminServer) handleLoginConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"turnstile_site_key": a.turnstileSite,
 	})
@@ -197,7 +206,11 @@ func (a *AdminServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if a.turnstileSecret != "" {
-		if !verifyTurnstile(a.turnstileSecret, body.TurnstileToken, ip) {
+		if strings.TrimSpace(body.TurnstileToken) == "" {
+			writeAdminError(w, http.StatusUnauthorized, "turnstile verification failed")
+			return
+		}
+		if !verifyTurnstile(a.turnstileSecret, body.TurnstileToken) {
 			a.recordLoginFail(ip)
 			writeAdminError(w, http.StatusUnauthorized, "turnstile verification failed")
 			return

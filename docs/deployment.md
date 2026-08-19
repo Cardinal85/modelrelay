@@ -1,6 +1,6 @@
 # ModelRelay 部署指南
 
-当前版本：**0.2.1**
+当前版本：**0.2.2**
 
 本文档只有一条主流程：**Relay → 证书 → Agent → New API → 验收**。
 请从第 0 步开始执行。`certmgr` 图形界面逐步操作见第 2.0 节；两套 CA 拷反见第 8.6 节；卸载见第 11 节；平台差异、反代和手工安装放在文档末尾。
@@ -648,7 +648,7 @@ $token = (Select-String -Path C:\ModelRelay\etc\relay\relay.env -Pattern '^RELAY
 curl.exe -i http://127.0.0.1:9100/v1/models -H "Authorization: Bearer $token"
 ```
 
-WebUI 默认只监听 `127.0.0.1:9200`。可用 SSH 隧道，也可以用 Cloudflare/nginx 反代到该端口（不要把 `9100` 一起反出去）。反代时在 `relay.yaml` 设置 `admin.trusted_proxies`（本机 nginx 填 `127.0.0.1`），HTTPS 时设 `admin.secure_cookie: true` 或让反代传 `X-Forwarded-Proto: https`。建议再加 Cloudflare Access；可选配置 `admin.turnstile`。
+WebUI 默认只监听 `127.0.0.1:9200`。可用 SSH 隧道，也可以用 Cloudflare/nginx 反代到该端口（不要把 `9100` 一起反出去）。反代时在 `relay.yaml` 设置 `admin.trusted_proxies`（本机 nginx 填 `127.0.0.1`），HTTPS 时设 `admin.secure_cookie: true` 或让反代传 `X-Forwarded-Proto: https`。建议再加 Cloudflare Access；可选配置 `admin.turnstile`。经 Cloudflare 反代时，升级 Relay 后请清除该域名的缓存（至少 `/` 与 `/static/app.js`），否则登录页可能仍加载旧脚本，Turnstile 校验会失败。
 
 本地或隧道打开：
 
@@ -1142,7 +1142,7 @@ if (Test-Path C:\ModelRelay\data\ModelRelayRelay.err.log) {
 
 **Linux / Windows Agent** 把 `--component agent` / `-Component Agent` 换成对应参数即可。可选：设置 `RELAY_ADMIN_URL`、`RELAY_ADMIN_USERNAME`、`RELAY_ADMIN_PASSWORD` 后安装器会先 Drain 该 `node_id`；没有凭据就跳过，直接停进程。
 
-日志里应出现 `0.2.1 started`。失败时用备份的 `bin` 覆盖回去再启动。
+日志里应出现 `0.2.2 started`。失败时用备份的 `bin` 覆盖回去再启动。
 
 ### 8.5 常用排障
 
